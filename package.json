@@ -1,0 +1,14 @@
+{
+  "name": "agent-fleet",
+  "version": "0.1.0",
+  "description": "Local live dashboard of every coding-agent session on this machine and how they relate.",
+  "type": "module",
+  "private": true,
+  "engines": { "node": ">=22" },
+  "bin": { "agent-fleet": "bin/agent-fleet.mjs" },
+  "scripts": {
+    "start": "node bin/agent-fleet.mjs serve",
+    "snapshot": "node bin/agent-fleet.mjs snapshot",
+    "test": "node --test test/*.test.mjs"
+  }
+}

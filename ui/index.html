@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Agent Fleet</title>
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <link rel="stylesheet" href="/style.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="brand">
+        <svg class="brand-mark" viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="12" r="2.6" /><circle cx="18" cy="5.5" r="2.2" /><circle cx="18" cy="18.5" r="2.2" /><path d="M7.4 11 15.9 6.4M7.4 13l8.5 4.6" /></svg>
+        <span>Agent Fleet</span>
+      </div>
+      <div class="pulse" id="pulse" title="Live connection"><span class="pulse-dot"></span><span id="pulse-text">connecting…</span></div>
+      <div class="stats" id="stats"></div>
+      <div class="spacer"></div>
+      <div class="segmented" role="tablist" aria-label="Scope">
+        <button data-scope="live" class="on" role="tab">Live</button>
+        <button data-scope="all" role="tab" id="scope-all">Last 12 h</button>
+      </div>
+      <input id="search" type="search" placeholder="Filter title, project, model…" autocomplete="off" spellcheck="false" />
+    </header>
+
+    <div class="shell">
+      <aside class="rail">
+        <section>
+          <h2>Waiting for you <span class="count" id="waiting-count">0</span></h2>
+          <ol id="waiting" class="waiting"></ol>
+        </section>
+        <section>
+          <h2>Agents</h2>
+          <div id="agent-filters" class="agent-filters"></div>
+        </section>
+        <section>
+          <h2>Relations</h2>
+          <ul class="legend">
+            <li><svg viewBox="0 0 40 10"><path class="e-spawn" d="M2 5H38" /></svg>started</li>
+            <li><svg viewBox="0 0 40 10"><path class="e-message" d="M2 5H38" /></svg>sent message</li>
+            <li><svg viewBox="0 0 40 10"><path class="e-report" d="M2 5H38" /></svg>reported back</li>
+            <li><svg viewBox="0 0 40 10"><path class="e-dependency" d="M2 5H38" /></svg>output feeds</li>
+            <li><svg viewBox="0 0 40 10"><path class="e-process" d="M2 5H38" /></svg>process (inferred)</li>
+          </ul>
+        </section>
+        <section class="sources" id="sources"></section>
+      </aside>
+
+      <main class="canvas" id="canvas">
+        <svg id="graph" xmlns="http://www.w3.org/2000/svg">
+          <defs>
+            <marker id="arrow-message" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" /></marker>
+            <marker id="arrow-report" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" /></marker>
+            <marker id="arrow-dependency" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" /></marker>
+          </defs>
+          <g id="viewport"></g>
+        </svg>
+        <div class="empty" id="empty" hidden>
+          <p class="empty-title">No live agent sessions</p>
+          <p>Start Claude, Codex, OhMyPi or Pi anywhere on this Mac and it shows up here within a few seconds.</p>
+        </div>
+        <div class="zoom">
+          <button id="zoom-in" title="Zoom in">+</button>
+          <button id="zoom-out" title="Zoom out">−</button>
+          <button id="zoom-fit" title="Fit to screen">Fit</button>
+        </div>
+      </main>
+
+      <aside class="panel" id="panel" hidden>
+        <button class="panel-close" id="panel-close" aria-label="Close">×</button>
+        <div id="panel-body"></div>
+      </aside>
+    </div>
+    <script type="module" src="/app.js"></script>
+  </body>
+</html>
