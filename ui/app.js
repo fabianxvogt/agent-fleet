@@ -1,4 +1,5 @@
 import { CARD_H, CARD_W, LANE_PAD, layout, selectVisible } from "/layout.js";
+import { createInspector } from "/inspector.js";
 
 const AGENTS = {
   claude: { label: "Claude", color: "var(--a-claude)" },
@@ -16,6 +17,7 @@ const STATUS_LABEL = { working: "Working", waiting: "Waiting for you", idle: "Id
 const EDGE_LABEL = { spawn: "started", message: "sent message", report: "reported back", dependency: "feeds", process: "started process" };
 
 const $ = (id) => document.getElementById(id);
+const inspector = createInspector($("session-content"));
 const state = {
   snap: null,
   scope: "live",
@@ -98,6 +100,8 @@ function render() {
   }
 
   $("viewport").innerHTML = drawGraph(vis.nodes, vis.edges, L, vis.parked);
+  // Relation curves and labels can extend outside the lane rectangles.
+  state.graphBounds = $("viewport").getBBox();
   $("empty").hidden = vis.nodes.length > 0;
   state.visibleIds = new Set(vis.nodes.map((n) => n.id));
   applySelection();
@@ -261,6 +265,7 @@ function renderPanel() {
   const n = snap?.nodes.find((x) => x.id === state.selected);
   if (!n) {
     $("panel").hidden = true;
+    inspector.select(null);
     return;
   }
   $("panel").hidden = false;
@@ -302,14 +307,16 @@ function renderPanel() {
   }
   rels.sort((a, b) => (b.e.at ?? "").localeCompare(a.e.at ?? ""));
 
-  $("panel-body").innerHTML = `
+  $("panel-overview").innerHTML = `
     <h3>${esc(n.title)}</h3>
     <div class="chips">
       <span class="chip agent" style="background:${agent.color}">${esc(agent.label)}</span>
       <span class="chip status"><i style="background:var(--s-${safeStatus(n.status)})"></i>${esc(STATUS_LABEL[n.status] ?? n.status)}</span>
       ${n.role ? `<span class="chip">${esc(n.role)}</span>` : ""}
       <span class="chip">${esc(n.kind)}</span>
-    </div>
+    </div>`;
+  inspector.select(n.id, STATUS_LABEL[n.status] ?? n.status);
+  $("panel-body").innerHTML = `
     ${actions.length ? `<div class="actions">${actions.join("")}</div>` : ""}
     <dl class="facts">${facts.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${v}</dd>`).join("")}</dl>
     <h4>Relations (${rels.length})</h4>
@@ -350,25 +357,53 @@ function resumeCommand(n) {
 
 /* ---------- pan / zoom ---------- */
 
+// The overview is the furthest zoom-out. At larger scales, each axis stops
+// at the graph edge; an axis that already fits stays centered.
+function viewLimits() {
+  const bounds = state.graphBounds;
+  const box = $("canvas").getBoundingClientRect();
+  if (!bounds?.width || !bounds.height || box.width <= 0 || box.height <= 0) return null;
+  const pad = Math.min(30, box.width / 4, box.height / 4);
+  const minScale = Math.min(1.05, (box.width - pad * 2) / bounds.width, (box.height - pad * 2) / bounds.height);
+  return { width: box.width, height: box.height, pad, minScale, maxScale: 2.2 };
+}
+
 function applyView() {
+  const limits = viewLimits();
+  if (limits) {
+    const bounds = state.graphBounds;
+    const k = Math.max(limits.minScale, Math.min(limits.maxScale, state.view.k));
+    const bound = (value, origin, extent, available) => {
+      const span = extent * k;
+      if (span <= available - limits.pad * 2) return (available - span) / 2 - origin * k;
+      return Math.max(available - limits.pad - (origin + extent) * k, Math.min(limits.pad - origin * k, value));
+    };
+    state.view = {
+      k,
+      x: bound(state.view.x, bounds.x, bounds.width, limits.width),
+      y: bound(state.view.y, bounds.y, bounds.height, limits.height),
+    };
+  }
+  $("zoom-out").disabled = !limits || state.view.k <= limits.minScale + 1e-9;
+  $("zoom-in").disabled = !limits || state.view.k >= limits.maxScale - 1e-9;
   const { x, y, k } = state.view;
   $("viewport").setAttribute("transform", `translate(${x} ${y}) scale(${k})`);
 }
 
 function fit() {
-  const L = state.lastLayout;
-  const box = $("canvas").getBoundingClientRect();
-  if (!L || !L.lanes.length) return;
-  const w = L.width;
-  const h = L.height;
-  const k = Math.max(0.25, Math.min(1.05, (box.width - 60) / w, (box.height - 60) / h));
-  state.view = { k, x: Math.max(24, (box.width - w * k) / 2), y: 24 };
+  const bounds = state.graphBounds;
+  const limits = viewLimits();
+  if (!limits) return;
+  const k = limits.minScale;
+  state.view = { k, x: (limits.width - bounds.width * k) / 2 - bounds.x * k, y: (limits.height - bounds.height * k) / 2 - bounds.y * k };
   applyView();
 }
 
 function zoomAt(factor, cx, cy) {
+  const limits = viewLimits();
+  if (!limits) return;
   const v = state.view;
-  const k = Math.max(0.2, Math.min(2.2, v.k * factor));
+  const k = Math.max(limits.minScale, Math.min(limits.maxScale, v.k * factor));
   const f = k / v.k;
   state.view = { k, x: cx - (cx - v.x) * f, y: cy - (cy - v.y) * f };
   applyView();
@@ -388,13 +423,17 @@ function select(id, { center = false } = {}) {
   state.selected = id;
   applySelection();
   renderPanel();
-  if (!id) return;
+  if (!id) {
+    applyView();
+    return;
+  }
   // opening the panel narrows the canvas; bring the node back if it ended up hidden
   const g = [...$("viewport").querySelectorAll(".node")].find((el) => el.dataset.id === id);
   const box = $("canvas").getBoundingClientRect();
   const r = g?.getBoundingClientRect();
   const offscreen = r && (r.right > box.right || r.left < box.left || r.bottom > box.bottom || r.top < box.top);
   if (center || offscreen) centerOn(id);
+  else applyView();
 }
 
 /* ---------- events ---------- */
@@ -510,14 +549,8 @@ function wire() {
       render();
     }
   });
-  let resizeTimer = null;
-  window.addEventListener("resize", () => {
-    clearTimeout(resizeTimer);
-    resizeTimer = setTimeout(() => {
-      state.needsFit = true;
-      render();
-    }, 200);
-  });
+  // Includes panel open/close and app-pane resizing, which do not resize window.
+  new ResizeObserver(() => applyView()).observe(canvas);
 
   // relative timestamps tick without a re-render
   setInterval(() => {

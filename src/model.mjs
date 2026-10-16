@@ -12,6 +12,7 @@
  *   agentsviewId  id understood by agentsview's /sessions/<id> route, if any
  *   openUrl       deep link that opens the session in its own app, if any
  *   source        file the data came from
+ *   transcript    optional JSONL path when source is registry/desktop metadata
  *   meta          adapter-specific extras (shown raw in the detail panel)
  *
  * Edge:

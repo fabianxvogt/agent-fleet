@@ -57,6 +57,7 @@ test("claude: live registry, desktop spawn/message/report links and subagents", 
   assert.equal(byId.get("claude:parent-sid").status, "working");
   assert.equal(byId.get("claude:parent-sid").title, "Parent task");
   assert.equal(byId.get("claude:parent-sid").openUrl, "claude://claude.ai/epitaxy/local_p");
+  assert.equal(byId.get("claude:parent-sid").transcript, join(proj, "parent-sid.jsonl"));
   assert.equal(byId.get("claude:child-sid").status, "done");
   assert.equal(byId.get("claude:child-sid").project, "app", "worktree maps back to its repository");
   const sub = byId.get("claude-sub:parent-sid:agent-a1");

@@ -214,6 +214,7 @@ export function createClaudeAdapter() {
             agentsviewId: sid,
             openUrl: d ? `claude://claude.ai/epitaxy/${d.localId}` : null,
             source: d?.file ?? live?.file ?? t?.path ?? null,
+            transcript: t?.path ?? null,
             meta: { effort: d?.effort, permissionMode: d?.permissionMode, desktopId: d?.localId, kind: live?.kind },
           }),
         );
