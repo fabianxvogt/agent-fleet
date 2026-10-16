@@ -1,5 +1,6 @@
 import { CARD_H, CARD_W, LANE_PAD, layout, selectVisible } from "/layout.js";
 import { createInspector } from "/inspector.js";
+import { createBrowserView } from "/browser-view.js";
 
 const AGENTS = {
   claude: { label: "Claude", color: "var(--a-claude)" },
@@ -17,7 +18,7 @@ const STATUS_LABEL = { working: "Working", waiting: "Waiting for you", idle: "Id
 const EDGE_LABEL = { spawn: "started", message: "sent message", report: "reported back", dependency: "feeds", process: "started process" };
 
 const $ = (id) => document.getElementById(id);
-const inspector = createInspector($("session-content"));
+const inspector = createInspector($("session-content"), { browserView: createBrowserView($("session-live")) });
 const state = {
   snap: null,
   scope: "live",

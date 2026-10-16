@@ -1,6 +1,7 @@
 # Agent Fleet docs
 
 - [ADAPTERS.md](ADAPTERS.md): adapter contract for adding agents.
+- [BROWSER.md](BROWSER.md): managed terminal browser commands, lifecycle, evidence and limits.
 - [../ROADMAP.md](../ROADMAP.md): Now / Next / Later / Done.
 
 ## Data sources (verified on this Mac, 2026-10-16)
@@ -39,9 +40,9 @@ Classification: **INCREMENTAL**, a local tooling prototype with no research clai
 
 Evidence: [navigation regressions](../test/navigation.test.mjs) drove the production UI event handlers with synthetic data and failed before the fix. Seven cases cover wheel, pinch/buttons, drag, deep graphs, details, resize/live shrinkage and rendered curves outside lane bounds. All 23 project tests pass. Browser checks used synthetic sessions and confirmed the disabled overview zoom-out control, pan limits and detail-panel resizing. Independent review found that relation curves extend beyond layout rectangles; the corrected implementation measures SVG bounds including their origin. No benchmark or new scientific proof is claimed. Next check: owner use with real session-tree changes.
 
-## Proposed session inspector
+## Session inspector and live views
 
-Owner direction, 2026-10-16: phase 1 is implemented as the v0.2 inspector. Browser/window capture and artifact previews below remain proposals. agentsview is retained as the background archive.
+Owner direction, 2026-10-16: phase 1 is implemented as the v0.2 inspector; phase 2 adds the v0.3 managed terminal browser pilot. Native window capture and artifact previews remain proposals. agentsview is retained as the background archive.
 
 ### Implemented activity, conversation and results
 
@@ -53,20 +54,20 @@ The selected inspector polls every 4 seconds while visible. It keeps up to 400 o
 
 Evidence (`EMPIRICAL`, 2026-10-16): installed agentsview v0.45.0 session metadata, descending message pagination, transcript revision and embedded tool-output fields checked against an Agent Fleet-related session without copying its transcript. 42 automated tests cover formats, branch selection, redaction, stable identities, archive/live merging, pagination, selection races, archive replacement, unavailable sources, file boundaries/aliases, HTTP guards and the existing graph behavior. Synthetic browser checks verified Chat, earlier-message loading and expanded Results. Independent review identified analysis-channel exposure, local-tail rollover loss, pagination gaps/empty-cursor handling, cwd aliases and archive revision mixing; these are corrected and regression-covered. No formal guarantee or cross-runtime completeness claim. Next check: owner use across live Claude/OMP/Pi sessions; native/binary previews remain outside phase 1.
 
-The project graph remains the overview. Its larger inspector now presents observed activity and conversation/tool history; associated visual outputs are the next extension. A previous log entry is not proof of what a process is doing now.
+The project graph remains the overview. Its inspector presents observed activity, conversation/tool history and the explicitly attached browser. A previous log entry is not proof of what a process is doing now.
 
 | Surface | Candidate implementation | Main gate |
 | --- | --- | --- |
 | Current tool, command, file | Implemented: normalize selected-session log events on demand and poll while visible | Coverage follows the runtime's recorded events; observation time is explicit |
 | Conversation and tool results | Implemented: Agent Fleet UI, local recent events and server-side agentsview messages integration | Installed v0.45.0 verified; sessions still need to be indexed for older history |
 | Images and changed files | Explicit session-associated artifacts; safe image/text/diff rendering | Associate outputs with the producing session, restrict file access, escape content, and limit sizes; never execute file HTML |
-| Browser, including terminal agents | Capture an explicitly associated Chromium target using DevTools screenshot/screencast support | Available endpoint, stable target/session IDs, multiple tabs, coexistence with the controlling tool, and headless-runtime compatibility |
+| Browser, including terminal agents | Implemented pilot: explicitly bound isolated Chromium, terminal commands, read-only frames and trusted click markers | One main tab; existing browser tools, popups and iframe clicks require further integration. See [BROWSER.md](BROWSER.md) |
 | Game or native app | A small macOS helper captures a selected window using ScreenCaptureKit | OS recording permission, window lifecycle, capture performance and explicit association with the agent |
 
 **Adopted archive decision:** Agent Fleet is the primary interface; agentsview stays in the background for history/search/usage. Its service still runs. Eliminating it requires owning the necessary importers, archive/index and maintenance, or another validated integration; copying the chat UI alone does not achieve that. Graph collection and recent log content work without agentsview.
 
-**Remaining pilot order:** one terminal-controlled browser with live frames and tool-event click markers; then selected-window capture and richer artifacts. Existing browsers without an accessible capture source can expose only their available logs/artifacts until an integration exists. A C++ game can be viewed as a window independently of its language; this has not been tested with Everwild.
+**Pilot evidence:** 60 automated tests pass, including actual isolated Chromium, terminal CLI commands, live-view/controller coexistence, trusted click observation, navigation, cancellation, stop/restart and synthetic UI state races. Browser checks show the local demo's changing clock/counter and a terminal click ring in the Session Live tab. Details and limitations are in [BROWSER.md](BROWSER.md). Classification: `INCREMENTAL / EMPIRICAL`; no research/proof claim.
 
-**Click markers and resources:** browser automation does not necessarily move the OS cursor. Accurate markers need tool-action events with coordinates (or resolved targets), timestamp and target ID aligned to the frames; distinguish an attempted click from confirmed execution. Stream the selected view first, use low-rate thumbnails elsewhere, and show stale/disconnected states. Begin with viewing; interaction takeover is a separate design decision. Shared browsers or processes require explicit association rather than a guessed owner. No capture permissions, debugging endpoints or recording are enabled by this proposal.
+**Next integrations:** existing browser tools need an accessible capture source and explicit association. Selected-window capture and richer artifacts remain unimplemented. A C++ game can be viewed as a window independently of its language; this has not been tested with Everwild. Native capture permissions, thumbnails and interactive takeover are separate decisions. The managed browser uses a private debugging pipe and records no frames to disk; no OS screen-recording permission is enabled.
 
 Technical basis, checked 2026-10-16: [agentsview upstream API](https://github.com/kenn-io/agentsview/blob/main/openapi.yaml) documents session messages, tool calls and watch endpoints; [Chromium DevTools Page](https://chromedevtools.github.io/devtools-protocol/tot/Page/) provides screenshot/screencast primitives (screencast is experimental); [Apple's capture sample](https://developer.apple.com/documentation/screencapturekit/capturing-screen-content-in-macos) demonstrates window filtering and recording permission. These support feasibility, not compatibility with every installed runtime. Estimates of integration effort remain engineering judgments until the browser pilot.

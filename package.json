@@ -1,6 +1,6 @@
 {
   "name": "agent-fleet",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Local live dashboard of every coding-agent session on this machine and how they relate.",
   "type": "module",
   "private": true,

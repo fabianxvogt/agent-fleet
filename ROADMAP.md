@@ -1,11 +1,11 @@
 # Roadmap
 
 ## Now
-- Owner use of the v0.2 session inspector: activity, chat history and tool results are inline; agentsview remains the background archive. Verify runtime-specific coverage during normal work.
+- Owner use of v0.3: inline session content plus one terminal-controlled Chromium browser with read-only live frames and observed click markers. agentsview remains the background archive. Verify coverage during normal work.
 
 ## Next
 - **Artifact previews:** explicitly associated image/file outputs, with safe access and rendering. Current Results displays text/tool outputs and agent responses.
-- **Proposed browser pilot:** one explicitly associated Chromium target, read-only live frames, and click markers from actual tool events. Prove session-to-tab mapping and observer compatibility before adding other runtimes.
+- **Browser coverage:** integrate a specific existing terminal browser tool when selected. The managed pilot currently owns one main tab; multiple tabs, iframe clicks and attaching existing browser sessions remain unimplemented.
 - **"Asked you a question" vs. "finished":** read the last assistant message type for Claude and Codex, so *Waiting for you* means a real ask.
 - **OMP inter-agent messages:** `irc:incoming`, `async-result` and `live-delegation` custom messages become `message`/`report` edges.
 - **OMP L1 results:** `*.l1-result.txt` and l1_session send/receive become `report` edges.
@@ -22,6 +22,12 @@
 - Remote machines over SSH (same adapters, remote `ps`/`lsof`).
 
 ## Done
+- 2026-10-16 v0.3 browser pilot (`INCREMENTAL / EMPIRICAL`):
+  - explicit session binding, isolated temporary Chromium profile and terminal start/open/click/fill/scroll/state/stop commands
+  - selected-session Live tab; read-only JPEG frames while visible, trusted DOM click markers aligned by run/document/time, disconnection and navigation invalidation
+  - private debugging pipe and Unix socket, loopback viewer, no HTTP control route; bounded messages, queues and viewers
+  - independent review findings fixed: navigation readiness, delayed queued actions, bootstrap recovery, stop/restart race, IPv6 and URL credentials
+  - [commands, evidence and limitations](docs/BROWSER.md); 60 tests including real isolated Chrome and synthetic UI regression coverage
 - 2026-10-16 v0.2 session inspector (`INCREMENTAL / EMPIRICAL`):
   - selected-session activity from Claude, Codex, OMP, Pi and fleet logs; observation time and call/return status
   - inline Chat and Results, expandable tool input/output, latest agent response, archive pagination and metadata disclosure

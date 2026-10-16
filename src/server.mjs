@@ -4,9 +4,10 @@ import { extname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createCollector } from "./collector.mjs";
 import { createDetailsService } from "./details.mjs";
+import { watchPilot } from "./browser/pilot.mjs";
 
 const UI_DIR = fileURLToPath(new URL("../ui/", import.meta.url));
-const STATIC = { "/": "index.html", "/app.js": "app.js", "/inspector.js": "inspector.js", "/layout.js": "layout.js", "/style.css": "style.css", "/favicon.svg": "favicon.svg" };
+const STATIC = { "/": "index.html", "/app.js": "app.js", "/inspector.js": "inspector.js", "/browser-view.js": "browser-view.js", "/browser-demo": "browser-demo.html", "/browser-demo.js": "browser-demo.js", "/layout.js": "layout.js", "/style.css": "style.css", "/favicon.svg": "favicon.svg" };
 const TYPES = { ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8", ".svg": "image/svg+xml" };
 
 export async function serve(config, adapters) {
@@ -23,7 +24,7 @@ export async function serve(config, adapters) {
 
   const withExtras = (snap) => ({ ...snap, agentsviewUp });
 
-  const server = createDashboardServer(collector, details, { clients, withExtras });
+  const server = createDashboardServer(collector, details, { clients, withExtras, browserConfig: config });
 
   // Keep SSE connections alive through proxies and sleeping laptops.
   setInterval(() => {
@@ -66,7 +67,8 @@ function json(res, body, cache = "no-cache") {
 }
 
 /** HTTP surface separated from collection so integration tests use synthetic sessions. */
-export function createDashboardServer(collector, details, { clients = new Set(), withExtras = (s) => s } = {}) {
+export function createDashboardServer(collector, details, { clients = new Set(), withExtras = (s) => s, browserConfig = null } = {}) {
+  const browserViewers = new Set();
   return createServer(async (req, res) => {
     // DNS-rebinding guard: only answer requests addressed to loopback names.
     const host = (req.headers.host ?? "").replace(/:\d+$/, "");
@@ -86,7 +88,7 @@ export function createDashboardServer(collector, details, { clients = new Set(),
           res.writeHead(403).end("forbidden");
           return;
         }
-        const match = /^\/api\/sessions\/([^/]+)\/details$/.exec(url.pathname);
+        const match = /^\/api\/sessions\/([^/]+)\/(details|browser\/events)$/.exec(url.pathname);
         if (!match) { res.writeHead(404).end("not found"); return; }
         let id;
         try { id = decodeURIComponent(match[1]); }
@@ -99,6 +101,24 @@ export function createDashboardServer(collector, details, { clients = new Set(),
         if (!collector.latest()) await collector.ready();
         const n = collector.latest()?.nodes.find((n) => n.id === id);
         if (!n) { res.writeHead(404).end("session not found"); return; }
+        if (match[2] === "browser/events") {
+          if (browserViewers.size >= 8) { res.writeHead(503).end("too many browser viewers"); return; }
+          res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-store", connection: "keep-alive" });
+          browserViewers.add(res);
+          res.write("retry: 3000\n\n");
+          let closed = false;
+          let stop = null;
+          const emit = (type, data) => {
+            if (closed) return;
+            if (res.writableLength > 2 * 1024 * 1024) { res.destroy(); return; }
+            res.write(`event: ${type}\ndata: ${JSON.stringify(data)}\n\n`);
+          };
+          req.on("close", () => { closed = true; browserViewers.delete(res); stop?.(); });
+          if (browserConfig) stop = await watchPilot(browserConfig, n, emit);
+          else emit("status", { state: "unavailable" });
+          if (closed) stop?.();
+          return;
+        }
         json(res, await details.get(n, { before, revision }), "no-store");
       } else if (url.pathname === "/api/snapshot") {
         if (!collector.latest()) await collector.ready();

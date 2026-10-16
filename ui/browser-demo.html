@@ -1,0 +1,11 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/><title>Agent Fleet browser pilot</title><link rel="stylesheet" href="/style.css"/></head>
+<body class="browser-demo">
+  <main><div class="demo-eyebrow">AGENT FLEET · TERMINAL BROWSER PILOT</div><h1>A real browser,<br/>live in your session.</h1>
+  <p class="demo-description">This page runs in an isolated Chromium instance.<br/>Terminal actions update the page; the dashboard watches.</p>
+  <div class="demo-actions"><button id="increment">Run a check</button><button id="theme">Change scene</button></div>
+  <div class="demo-metrics"><div><span>Checks completed</span><strong id="count">0</strong></div><div><span>Live browser clock</span><strong id="clock">—</strong></div></div>
+  <p id="last-action">Waiting for a terminal action.</p><div class="demo-note">Live view is read-only. Click rings show observed browser input.</div></main>
+  <script src="/browser-demo.js"></script>
+</body></html>

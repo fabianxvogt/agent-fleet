@@ -45,7 +45,7 @@ const ARCHIVE_NOTE = {
 };
 
 /** Fetch only the selected session; abort old requests and preserve reading position. */
-export function createInspector(root, { fetcher = (...args) => fetch(...args) } = {}) {
+export function createInspector(root, { fetcher = (...args) => fetch(...args), browserView = null } = {}) {
   let id = null;
   let generation = 0;
   let controller = null;
@@ -93,6 +93,7 @@ export function createInspector(root, { fetcher = (...args) => fetch(...args) } 
       <div class="inspector-tabs" role="tablist" aria-label="Session content">
         <button role="tab" data-content-tab="chat" aria-selected="${tab === "chat"}">Chat <span>${entries.length}</span></button>
         <button role="tab" data-content-tab="results" aria-selected="${tab === "results"}">Results <span>${results.length}</span></button>
+        <button role="tab" data-content-tab="live" aria-selected="${tab === "live"}">Live</button>
         <button class="inspector-refresh" data-inspector-refresh aria-label="Refresh session" ${loading || loadingOlder ? "disabled" : ""}>↻</button>
       </div>
       <div class="inspector-note" role="status">${esc(error ?? note ?? (loading ? "Updating…" : local?.truncated ? "Recent log window shown; older messages come from the archive." : local?.state === "available" ? "Recent events from the session log; history from the archive." : "History from the archive; current log activity is unavailable."))}${gapUntil !== null ? " Some archive messages are not loaded yet; load earlier messages to fill the gap." : ""}${recentLimited ? " Local view is limited to 400 events; use the archive for older history." : ""}</div>
@@ -104,6 +105,9 @@ export function createInspector(root, { fetcher = (...args) => fetch(...args) } 
     const nextThread = root.querySelector(".session-thread");
     if (reset || atBottom && !prepend) nextThread.scrollTop = nextThread.scrollHeight;
     else nextThread.scrollTop = prepend ? scrollTop + nextThread.scrollHeight - scrollHeight : scrollTop;
+    root.querySelector(".session-thread").hidden = tab === "live";
+    root.querySelector(".inspector-note").hidden = tab === "live";
+    browserView?.select(tab === "live" ? id : null);
   }
 
   async function refresh(older = false) {
@@ -192,8 +196,8 @@ export function createInspector(root, { fetcher = (...args) => fetch(...args) } 
       history = []; recent = []; local = archive = oldest = null;
       loading = loadingOlder = false; error = null; signature = ""; recentLimited = false; gapUntil = null; historyRevision = null;
       if (id) { render({ reset: true }); void refresh(); }
-      else root.innerHTML = "";
+      else { root.innerHTML = ""; browserView?.select(null); }
     },
-    destroy() { generation++; controller?.abort(); clearInterval(timer); },
+    destroy() { generation++; controller?.abort(); clearInterval(timer); browserView?.destroy(); },
   };
 }

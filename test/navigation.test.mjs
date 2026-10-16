@@ -43,6 +43,7 @@ function app(snap = snapshot(), overflow = 0) {
   const context = vm.createContext({
     ...graphLayout, URL, console,
     createInspector: () => ({ select() {} }),
+    createBrowserView: () => ({ select() {} }),
     document: { getElementById: get, querySelectorAll: () => [], addEventListener() {} },
     window: { addEventListener() {} },
     localStorage: { getItem: () => null },
