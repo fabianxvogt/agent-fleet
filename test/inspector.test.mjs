@@ -17,6 +17,18 @@ function root() {
   };
 }
 
+test("graph shortcut opens Live and later content refreshes preserve the selected viewer", async (t) => {
+  const r = root(); const selected = [];
+  const inspector = createInspector(r, { fetcher: async () => response("a", "reply"), browserView: { select: (id) => selected.push(id), destroy() {} } });
+  t.after(() => inspector.destroy());
+  inspector.select("a"); inspector.showTab("live");
+  await setImmediate();
+  assert.equal(selected.at(-1), "a");
+  assert.ok(r.innerHTML.includes('data-content-tab="live" aria-selected="true"'));
+  r.click({ contentTab: "chat" }); assert.equal(selected.at(-1), null);
+  inspector.showTab("live"); inspector.select(null); assert.equal(selected.at(-1), null);
+});
+
 test("late responses from a previous selection cannot replace the current session", async (t) => {
   const r = root();
   const pending = [];

@@ -11,6 +11,8 @@ Usage:
   agent-fleet install-service     install and start the macOS LaunchAgent (runs at login)
   agent-fleet uninstall-service   stop and remove the LaunchAgent
   agent-fleet service-status      show LaunchAgent state
+  agent-fleet install-app         install native Mac window, Desktop shortcut and login startup
+  agent-fleet uninstall-app       remove the Mac app and its login startup; keep the service
   agent-fleet browser help        terminal browser with a live inspector view
 
 Config: ~/.agent-fleet/config.json   Custom adapters: ~/.agent-fleet/adapters/*.mjs`;
@@ -19,6 +21,13 @@ const [cmd, ...rest] = process.argv.slice(2);
 const config = await loadConfig();
 
 switch (cmd) {
+  case "install-app":
+  case "uninstall-app": {
+    const desktop = await import("../src/desktop.mjs");
+    try { await desktop[cmd === "install-app" ? "installApp" : "uninstallApp"](config); }
+    catch (error) { console.error(error.stderr?.trim() || error.message); process.exitCode = 1; }
+    break;
+  }
   case "browser": {
     const { browserCli } = await import("../src/browser/cli.mjs");
     try { await browserCli(config, rest); }

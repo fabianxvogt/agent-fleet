@@ -1,12 +1,13 @@
 # Roadmap
 
 ## Now
-- Owner use of v0.3: inline session content plus one terminal-controlled Chromium browser with read-only live frames and observed click markers. agentsview remains the background archive. Verify coverage during normal work.
+- v0.9 fixes source-update barriers, skipped refresh deadlines and macOS service throttling. Independent source updates now complement graph folding, list/project focus and attention. Validate sustained daily freshness and larger-project readability; agentsview remains the background archive.
 
 ## Next
+- **Scale and sustained freshness:** validate the v0.9 source isolation and service scheduling over longer daily workloads; use process-stage timings to investigate any remaining outliers. Measure larger graph/list responsiveness before selecting virtualization or layout work.
 - **Artifact previews:** explicitly associated image/file outputs, with safe access and rendering. Current Results displays text/tool outputs and agent responses.
-- **Browser coverage:** integrate a specific existing terminal browser tool when selected. The managed pilot currently owns one main tab; multiple tabs, iframe clicks and attaching existing browser sessions remain unimplemented.
-- **"Asked you a question" vs. "finished":** read the last assistant message type for Claude and Codex, so *Waiting for you* means a real ask.
+- **Browser coverage:** validate automatic discovery during normal terminal-agent work. Private-pipe-only browser tools need a runtime-specific export; iframe click coordinates and following an owner's active tab remain unimplemented. Newly discovered pages appear in the Live selector.
+- **Attention coverage:** validate supported input/approval events in everyday use; extend runtime-specific formats when evidence is available. Prose questions stay labeled as inferred; bounded tails cannot recover omitted events.
 - **OMP inter-agent messages:** `irc:incoming`, `async-result` and `live-delegation` custom messages become `message`/`report` edges.
 - **OMP L1 results:** `*.l1-result.txt` and l1_session send/receive become `report` edges.
 - **Codex threads started from Claude:** link them when a Claude Bash call runs `codex exec`/`codex resume` and the thread id shows up in the transcript.
@@ -15,13 +16,60 @@
 - **Notifications:** a macOS notification when a session switches to *waiting* (opt-in).
 
 ## Later
-- **Proposed native views:** capture a selected game/application window through a local macOS helper; validate with an isolated demo before any Everwild integration. Session-to-window mapping and OS recording permission are separate gates.
+- **Proposed native views:** capture a selected game/application window through a local macOS helper; validate with an isolated demo before integrating a real application. Session-to-window mapping and OS recording permission are separate gates.
 - Decide whether agentsview can be retired after archive/search/usage requirements and migration costs are established. No removal selected yet.
 - Per-session token and cost badges, read from agentsview's `/api/v1/sessions/{id}/usage`.
 - Timeline view: how a session tree grew over the last hours.
 - Remote machines over SSH (same adapters, remote `ps`/`lsof`).
 
 ## Done
+- 2026-10-18 v0.9 repository release preparation (`INCREMENTAL / EMPIRICAL`):
+  - fresh-clone README with synthetic preview; separate usage, development and verification references; removed unnecessary real-project examples
+  - documented checks, sequential browser integration tests and ignore rules for local credentials/runtime state and generated output
+  - fixed the reproduced service reinstall race with bounded bootstrap retries; configured IPv6 health checks; six new service regressions
+  - 178 tests pass with no skips, JavaScript/Swift checks pass, local documentation links resolve and independent release review is clean; [evidence](docs/VERIFICATION.md#v09-repository-release-checks--2026-10-18)
+- 2026-10-18 v0.9 reliable source updates (`INCREMENTAL / EMPIRICAL`):
+  - sources publish independently and keep refreshing while another adapter is pending; overdue process rounds restart promptly instead of skipping a fixed interval
+  - observation-based freshness, late-result rejection across process failures, cancellation on stop and bounded stale-cache expiry; no relaxed freshness threshold or timeout increase
+  - source-specific stale styling and local age checks without graph relayout; safe process-stage timing diagnostics in health
+  - macOS service classified Interactive because native dashboard responsiveness depends on it; removed the lower-priority Nice setting and default CPU/I/O throttling
+  - final 90-second live check under load averages 126–149: all 90 samples current, collection duration 211–442 ms (median 291 ms), oldest source observation under four seconds
+  - 172 tests pass, independent review clean, controlled before/after and synthetic browser verification; updated service and signed v0.9.0 native app installed; [measurements and limits](docs/VERIFICATION.md#v09-source-isolation-and-service-scheduling--2026-10-18)
+- 2026-10-18 v0.8 collapsible completed branches (`INCREMENTAL / EMPIRICAL`):
+  - per-parent finished-session counts and keyboard-accessible fold controls; global Collapse finished / Expand all
+  - only fully completed child branches fold; active, waiting, failed, stale, unknown-idle and LIVE descendants remain visible, including when filters hide a blocking descendant
+  - filter-aware counts, independent list/attention contents, nested selection reveal, visible-parent selection when explicitly folding and automatic visibility when work resumes
+  - window-local fold state survives updates and filter/view changes; vanished parents are pruned
+  - 157 tests pass, independent review has no actionable findings, synthetic browser checks verified nested reveal, keyboard controls, filters and list completeness; [evidence and limits](docs/VERIFICATION.md#v08-collapsible-completed-branches--2026-10-18)
+- 2026-10-18 v0.7 compact list and project focus (`INCREMENTAL / EMPIRICAL`):
+  - Graph/List switch with remembered view, recent-first rows, session details and direct LIVE actions
+  - exact project/status filters shared with search, agents and attention; excluded ancestors stay excluded, visible counts and explicit no-match state
+  - full-window project inventory, unknown-project choice, retained zero-match selection and one-click filter reset
+  - native list scrolling, selection preservation, independent freshness updates, and an overlay inspector on narrower windows
+  - synthetic selector/UI regressions and browser verification; [evidence and limits](docs/VERIFICATION.md#v07-compact-list-and-project-focus--2026-10-18)
+- 2026-10-18 v0.6 attention and freshness (`INCREMENTAL / EMPIRICAL`):
+  - input/approval requests distinguished from completed turns; errors and aborted turns remain failed with live owners; inferred final prose questions are labeled and exclude parent-directed subagent prose
+  - failures visible in Live, counters and attention; separate recent completions, consistent search/agent filtering, keyboard buttons and narrow-window rail access
+  - health events update ages without graph relayout; stale/disconnected views and retained source data are explicit; readiness remains separate from data health
+  - bounded adapter/process collection, no overlapping timed-out reads, two-minute last-good retention, recovery and fresh timestamps for unchanged graphs
+  - Claude, Codex and fleet reads are bounded and concurrent, preserving graph order and fresh process ownership; process deadlines propagate to subprocesses, hard failures no longer masquerade as an empty process table
+  - synthetic regressions and before/after adapter measurements; current verification and remaining limits in [docs/README.md](docs/VERIFICATION.md#v06-attention-freshness-and-performance--2026-10-18)
+- 2026-10-16 v0.5 automatic multi-session browser views (`INCREMENTAL / EMPIRICAL`):
+  - automatic discovery through unique process ancestry or a fleet-worker worktree, with dedicated-profile/process/listener validation
+  - independent per-session CLI runs, legacy-run compatibility, multiple discovered browsers/pages and a Live view selector
+  - metadata-only discovery every four seconds; capture only while a view is selected, independent viewer cleanup and graph presence for all supported owners
+  - independent lifecycle review findings corrected; 85 tests and synthetic browser UI verification pass; installed service updated and healthy; [evidence and limits](docs/BROWSER.md)
+- 2026-10-16 native Mac app and login startup (`INCREMENTAL / EMPIRICAL`):
+  - own AppKit/WebKit window, app icon, Desktop shortcut and separate window login item
+  - background service starts at login and survives closing/quitting the app; initial loading retries until the service is ready
+  - isolated clipboard bridge, local navigation restriction and external links through the default apps; independent review findings corrected
+  - Swift build, local signature verification, launch entries, native UI with synthetic data, interrupted-load recovery and service survival after quitting verified; actual reboot not performed. See [DESKTOP.md](docs/DESKTOP.md)
+- 2026-10-16 v0.4 existing-browser adapter and graph shortcuts (`INCREMENTAL / EMPIRICAL`):
+  - exact session + PID/start identity + cwd/effective-profile checks + loopback CDP endpoint + page target
+  - independent read-only observation; original controller retains navigation, clicks, viewport/pixel density and screencast; detach leaves it alive
+  - adaptive frame aspect ratio, observed trusted clicks, navigation/scroll/resize invalidation and unsupported-URL blocking
+  - verified live-view availability adds a gold LIVE badge, mouse/keyboard shortcut and Live-scope inclusion for parked/finished owners
+  - independent review findings fixed and regression-covered; 77 tests pass, actual isolated Chromium integration and synthetic browser UI verification; [evidence and remaining external-session gate](docs/BROWSER.md)
 - 2026-10-16 v0.3 browser pilot (`INCREMENTAL / EMPIRICAL`):
   - explicit session binding, isolated temporary Chromium profile and terminal start/open/click/fill/scroll/state/stop commands
   - selected-session Live tab; read-only JPEG frames while visible, trusted DOM click markers aligned by run/document/time, disconnection and navigation invalidation

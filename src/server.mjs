@@ -2,9 +2,10 @@ import { readFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { extname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { createCollector } from "./collector.mjs";
+import { createCollector, snapshotHealth } from "./collector.mjs";
 import { createDetailsService } from "./details.mjs";
 import { watchPilot } from "./browser/pilot.mjs";
+import { createBrowserCatalog, withBrowserPresence } from "./browser/presence.mjs";
 
 const UI_DIR = fileURLToPath(new URL("../ui/", import.meta.url));
 const STATIC = { "/": "index.html", "/app.js": "app.js", "/inspector.js": "inspector.js", "/browser-view.js": "browser-view.js", "/browser-demo": "browser-demo.html", "/browser-demo.js": "browser-demo.js", "/layout.js": "layout.js", "/style.css": "style.css", "/favicon.svg": "favicon.svg" };
@@ -14,17 +15,32 @@ export async function serve(config, adapters) {
   const collector = createCollector(config, adapters);
   const details = createDetailsService(config);
   const clients = new Set();
+  const browsers = createBrowserCatalog(config);
   let agentsviewUp = false;
-
-  collector.events.on("snapshot", (snap) => {
+  let browserPresence = [];
+  let checkingBrowser = false;
+  const withExtras = (snap) => ({ ...withBrowserPresence(snap, browserPresence), agentsviewUp });
+  const broadcast = (snap) => {
     const payload = `event: snapshot\ndata: ${JSON.stringify(withExtras(snap))}\n\n`;
     for (const res of clients) res.write(payload);
+  };
+
+  collector.events.on("snapshot", (snap) => {
+    broadcast(snap);
   });
   collector.events.on("error", (error) => console.error("[collector]", error));
 
-  const withExtras = (snap) => ({ ...snap, agentsviewUp });
+  const refreshBrowser = async () => {
+    if (checkingBrowser || !collector.latest()) return;
+    checkingBrowser = true;
+    try {
+      const next = await browsers.refresh(collector.latest().nodes);
+      if (JSON.stringify(next) !== JSON.stringify(browserPresence)) { browserPresence = next; broadcast(collector.latest()); }
+    } finally { checkingBrowser = false; }
+  };
+  setInterval(() => void refreshBrowser().catch(() => {}), 4000).unref();
 
-  const server = createDashboardServer(collector, details, { clients, withExtras, browserConfig: config });
+  const server = createDashboardServer(collector, details, { clients, withExtras, browserConfig: config, browsers });
 
   // Keep SSE connections alive through proxies and sleeping laptops.
   setInterval(() => {
@@ -50,10 +66,16 @@ export async function serve(config, adapters) {
   console.log(`agent-fleet listening on http://${config.host}:${config.port}`);
   collector.start();
 
-  const shutdown = () => {
+  let shuttingDown = false;
+  const shutdown = async () => {
+    if (shuttingDown) return;
+    shuttingDown = true;
     collector.stop();
     server.close();
     for (const res of clients) res.end();
+    const deadline = setTimeout(() => process.exit(0), 5000);
+    await browsers.close();
+    clearTimeout(deadline);
     process.exit(0);
   };
   process.on("SIGINT", shutdown);
@@ -67,9 +89,18 @@ function json(res, body, cache = "no-cache") {
 }
 
 /** HTTP surface separated from collection so integration tests use synthetic sessions. */
-export function createDashboardServer(collector, details, { clients = new Set(), withExtras = (s) => s, browserConfig = null } = {}) {
+export function createDashboardServer(collector, details, { clients = new Set(), withExtras = (s) => s, browserConfig = null, browsers = null } = {}) {
   const browserViewers = new Set();
-  return createServer(async (req, res) => {
+  const health = () => collector.health?.() ?? snapshotHealth(collector.latest());
+  const sendHealth = (data) => {
+    const payload = `event: health\ndata: ${JSON.stringify(data)}\n\n`;
+    for (const res of clients) {
+      if (res.writableLength > 2 * 1024 * 1024) { res.destroy(); clients.delete(res); }
+      else res.write(payload);
+    }
+  };
+  collector.events?.on("health", sendHealth);
+  const server = createServer(async (req, res) => {
     // DNS-rebinding guard: only answer requests addressed to loopback names.
     const host = (req.headers.host ?? "").replace(/:\d+$/, "");
     if (!["127.0.0.1", "localhost", "[::1]"].includes(host)) {
@@ -108,13 +139,17 @@ export function createDashboardServer(collector, details, { clients = new Set(),
           res.write("retry: 3000\n\n");
           let closed = false;
           let stop = null;
+          const cancellation = new AbortController();
           const emit = (type, data) => {
             if (closed) return;
             if (res.writableLength > 2 * 1024 * 1024) { res.destroy(); return; }
             res.write(`event: ${type}\ndata: ${JSON.stringify(data)}\n\n`);
           };
-          req.on("close", () => { closed = true; browserViewers.delete(res); stop?.(); });
-          if (browserConfig) stop = await watchPilot(browserConfig, n, emit);
+          req.on("close", () => { closed = true; cancellation.abort(); browserViewers.delete(res); stop?.(); });
+          const source = url.searchParams.get("view");
+          if (source && !/^[a-f0-9-]{1,64}$/.test(source)) { emit("status", { state: "unavailable" }); res.end(); return; }
+          if (browsers) stop = await browsers.watch(n, emit, source, { signal: cancellation.signal });
+          else if (browserConfig) stop = await watchPilot(browserConfig, n, emit, { signal: cancellation.signal });
           else emit("status", { state: "unavailable" });
           if (closed) stop?.();
           return;
@@ -126,13 +161,13 @@ export function createDashboardServer(collector, details, { clients = new Set(),
         if (s) json(res, withExtras(s));
         else res.writeHead(503).end("collecting");
       } else if (url.pathname === "/api/health") {
-        const s = collector.latest();
-        json(res, { ok: Boolean(s), generatedAt: s?.generatedAt ?? null, collectMs: s?.collectMs ?? null, adapters: s?.adapters ?? [] });
+        json(res, health(), "no-store");
       } else if (url.pathname === "/api/events") {
         res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache", connection: "keep-alive" });
         res.write("retry: 3000\n\n");
         const s = collector.latest();
         if (s) res.write(`event: snapshot\ndata: ${JSON.stringify(withExtras(s))}\n\n`);
+        res.write(`event: health\ndata: ${JSON.stringify(health())}\n\n`);
         clients.add(res);
         req.on("close", () => clients.delete(res));
       } else if (STATIC[url.pathname]) {
@@ -148,4 +183,6 @@ export function createDashboardServer(collector, details, { clients = new Set(),
       res.end("internal error");
     }
   });
+  server.once("close", () => collector.events?.off("health", sendHealth));
+  return server;
 }

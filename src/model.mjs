@@ -7,6 +7,7 @@
  *   kind          session | subagent | fleet | worker | process
  *   title, role   human labels; role is e.g. "L1", "worker", "general-purpose"
  *   status        see STATUSES
+ *   attention     null or {kind: question|approval|completed, reason, at, evidence: explicit|inferred}
  *   surface       desktop | cli | app | exec | sdk | in-process
  *   cwd, project, model, pid, startedAt, lastActivityAt (ISO)
  *   agentsviewId  id understood by agentsview's /sessions/<id> route, if any
@@ -24,7 +25,7 @@
 
 export const STATUSES = {
   working: "Actively running a turn",
-  waiting: "Alive, turn finished, waiting for the human",
+  waiting: "Input or approval requested from the human",
   idle: "Alive but not working and not blocking anyone",
   queued: "Planned, not started yet",
   done: "Finished or process gone",
@@ -55,6 +56,7 @@ export function node(fields) {
     pid: null,
     startedAt: null,
     lastActivityAt: null,
+    attention: null,
     agentsviewId: null,
     openUrl: null,
     source: null,

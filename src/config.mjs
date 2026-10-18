@@ -8,13 +8,17 @@ export const DEFAULTS = {
   host: "127.0.0.1", // never bind beyond loopback; the dashboard shows session titles and paths
   port: 7420,
   intervalMs: 4000,
+  adapterTimeoutMs: 8000,
+  processTimeoutMs: 10_000,
+  retainStaleMs: 120_000,
   windowHours: 12, // ended sessions stay visible this long
-  parkAfterMinutes: 120, // "waiting" older than this counts as parked (idle)
+  parkAfterMinutes: 120, // quiet sessions are parked; explicit unresolved requests stay visible
   fleetRoots: [join(homedir(), "Development")],
   fleetScanDepth: 3,
   agentsviewUrl: "http://127.0.0.1:8080",
   adapterDir: join(CONFIG_DIR, "adapters"),
   disabledAdapters: [],
+  autoDiscoverBrowsers: true,
 };
 
 export async function loadConfig(overrides = {}) {

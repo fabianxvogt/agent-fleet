@@ -1,5 +1,6 @@
 import { join } from "node:path";
 import { edge, node } from "../model.mjs";
+import { readTurnState } from "../attention.mjs";
 import { fileCache, isoOrNull, listDir, projectName, readHeadRecords, readTailRecords, statSafe } from "../util.mjs";
 
 /**
@@ -12,13 +13,14 @@ import { fileCache, isoOrNull, listDir, projectName, readHeadRecords, readTailRe
  */
 
 const WORKING_MS = 60_000;
+const SWITCH_MS = 30_000; // a candidate this much newer than the previous pick means the process switched sessions
 
 export function createSessionTreeAdapter({ id, label, agent, sessionsDir, roleForDepth, titleFallback }) {
   const heads = fileCache();
   const tails = fileCache();
   let previous = new Map(); // pid -> path from the last tick, so ties do not flip between sessions
 
-  async function info(path, st) {
+  async function info(path, st, isSubagent = false) {
     const head = await heads.get(path, st, async () => {
       const recs = await readHeadRecords(path, 6, 32 * 1024);
       const session = recs.find((r) => r.type === "session") ?? {};
@@ -35,15 +37,17 @@ export function createSessionTreeAdapter({ id, label, agent, sessionsDir, roleFo
         if (r.type === "title_change" && r.title) title = r.title;
         if (r.type === "session_info" && r.name) title = r.name;
       }
-      return { model, title };
+      return { model, title, turn: readTurnState(recs, agent, st.mtimeMs, { humanAudience: !isSubagent }) };
     });
-    return { ...head, model: tail.model ?? head.model, title: tail.title ?? head.title };
+    return { ...head, model: tail.model ?? head.model, title: tail.title ?? head.title, turn: tail.turn };
   }
 
   /**
-   * Which root session each live process is on. pi/omp open session files only briefly while appending,
-   * so open files are a hint, not proof. Preference: same cwd as the process, then most recently modified,
-   * and only files touched since the process started.
+   * Which root session each live process is on. pi/omp open session files only briefly while appending
+   * (and sometimes open other projects' files), so open files only matter when no session shares the cwd.
+   * Among sessions in the process cwd touched since it started, the most recently written one wins: a
+   * process that switches sessions (/new, resume) writes to the new file. The previous pick is kept only
+   * while no other candidate is clearly newer, which stops ties from flapping without pinning an old session.
    */
   async function assignProcesses(ctx, roots) {
     const assigned = new Map(); // path -> pid
@@ -51,15 +55,20 @@ export function createSessionTreeAdapter({ id, label, agent, sessionsDir, roleFo
     for (const p of procs) {
       const startedMs = ctx.now - etimeMs(p.etime);
       const open = new Set(p.openFiles);
-      let best = null;
+      const sameCwd = [];
+      const openOnly = [];
       for (const r of roots) {
         if (assigned.has(r.path) || r.st.mtimeMs < startedMs - 5_000) continue;
         const i = await info(r.path, r.st);
-        const score = (i.cwd && i.cwd === p.cwd ? 2 : 0) + (open.has(r.path) ? 1 : 0) + (previous.get(p.pid) === r.path ? 1.5 : 0);
-        if (score === 0) continue;
-        if (!best || score > best.score || (score === best.score && r.st.mtimeMs > best.mtimeMs)) best = { path: r.path, score, mtimeMs: r.st.mtimeMs };
+        if (i.cwd && i.cwd === p.cwd) sameCwd.push(r);
+        else if (open.has(r.path)) openOnly.push(r);
       }
-      if (best) assigned.set(best.path, p.pid);
+      const pool = sameCwd.length ? sameCwd : openOnly;
+      if (!pool.length) continue;
+      const newest = pool.reduce((a, b) => (b.st.mtimeMs > a.st.mtimeMs ? b : a));
+      const prev = pool.find((r) => r.path === previous.get(p.pid));
+      const pick = prev && newest.st.mtimeMs - prev.st.mtimeMs < SWITCH_MS ? prev : newest;
+      assigned.set(pick.path, p.pid);
     }
     previous = new Map([...assigned].map(([path, pid]) => [pid, path]));
     return assigned;
@@ -73,7 +82,7 @@ export function createSessionTreeAdapter({ id, label, agent, sessionsDir, roleFo
       if (!st) continue;
       const fresh = ctx.now - st.mtimeMs < WORKING_MS;
       if (!fresh && !rootAlive && ctx.now - st.mtimeMs > ctx.windowMs) continue;
-      const i = await info(path, st);
+      const i = await info(path, st, true);
       const name = f.name.slice(0, -6);
       const nid = `${agent}:${i.sessionId ?? `${parentId}/${name}`}`;
       out.nodes.push(
@@ -83,7 +92,8 @@ export function createSessionTreeAdapter({ id, label, agent, sessionsDir, roleFo
           kind: "subagent",
           title: i.title || name,
           role: roleForDepth(depth),
-          status: fresh ? "working" : rootAlive ? "idle" : "done",
+          status: statusFor(i.turn, rootAlive, fresh),
+          attention: i.turn.attention,
           surface: "in-process",
           cwd: i.cwd,
           project: projectName(i.cwd),
@@ -140,7 +150,8 @@ export function createSessionTreeAdapter({ id, label, agent, sessionsDir, roleFo
             kind: "session",
             title: i.title || titleFallback(i),
             role: roleForDepth(0),
-            status: pid ? (fresh ? "working" : "waiting") : "done",
+            status: statusFor(i.turn, Boolean(pid), Boolean(pid) && fresh),
+            attention: i.turn.attention,
             surface: "cli",
             cwd: i.cwd,
             project: projectName(i.cwd),
@@ -161,6 +172,13 @@ export function createSessionTreeAdapter({ id, label, agent, sessionsDir, roleFo
       return out;
     },
   };
+}
+
+function statusFor(turn, alive, fresh) {
+  if (turn.phase === "failed") return "failed";
+  if (["question", "approval"].includes(turn.attention?.kind)) return "waiting";
+  if (turn.phase !== "completed" && fresh) return "working";
+  return alive ? "idle" : "done";
 }
 
 /** ps etime "[[dd-]hh:]mm:ss" to milliseconds. */

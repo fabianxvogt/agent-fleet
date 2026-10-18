@@ -33,7 +33,7 @@ function plist() {
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><true/>
   <key>ThrottleInterval</key><integer>15</integer>
-  <key>Nice</key><integer>5</integer>
+  <key>ProcessType</key><string>Interactive</string>
   <key>StandardOutPath</key><string>${esc(LOG)}</string>
   <key>StandardErrorPath</key><string>${esc(LOG)}</string>
 </dict>
@@ -43,15 +43,20 @@ function plist() {
 
 async function launchctl(...args) {
   try {
-    return (await run("launchctl", args)).stdout;
+    return (await run("launchctl", args, { timeout: 10_000 })).stdout;
   } catch (error) {
-    return { error: error.stderr?.trim() || String(error) };
+    return { error: error.stderr?.trim() || String(error), code: error.code };
   }
 }
 
-async function health(config) {
+function serviceUrl(config) {
+  const host = config.host === "::1" ? "[::1]" : config.host ?? "127.0.0.1";
+  return `http://${host}:${config.port}`;
+}
+
+async function health(config, request = fetch) {
   try {
-    const r = await fetch(`http://127.0.0.1:${config.port}/api/health`, { signal: AbortSignal.timeout(2000) });
+    const r = await request(`${serviceUrl(config)}/api/health`, { signal: AbortSignal.timeout(2000) });
     return r.ok ? await r.json() : null;
   } catch {
     return null;
@@ -62,18 +67,34 @@ export async function install(config) {
   await mkdir(join(CONFIG_DIR, "logs"), { recursive: true });
   await mkdir(join(homedir(), "Library", "LaunchAgents"), { recursive: true });
   await writeFile(PLIST, plist());
-  await launchctl("bootout", `${domain()}/${LABEL}`); // replace a previous install
-  const res = await launchctl("bootstrap", domain(), PLIST);
+  await activateService(config);
+}
+
+export async function activateService(config, {
+  launch = launchctl,
+  wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+  request = fetch,
+  log = console.log,
+} = {}) {
+  const previous = await launch("bootout", `${domain()}/${LABEL}`); // replace a previous install
+  let res = await launch("bootstrap", domain(), PLIST);
+  // launchd can acknowledge bootout before teardown finishes. Retry a possible
+  // teardown race only after successful bootout; never boot out again on retry.
+  for (const delay of [250, 500, 1000, 2000]) {
+    if (previous?.error || !res?.error || res.code !== 5) break;
+    await wait(delay);
+    res = await launch("bootstrap", domain(), PLIST);
+  }
   if (res?.error) throw new Error(`launchctl bootstrap failed: ${res.error}`);
   for (let i = 0; i < 40; i++) {
-    const h = await health(config);
-    if (h?.ok) {
-      console.log(`agent-fleet service running → http://127.0.0.1:${config.port}  (log: ${LOG})`);
+    const h = await health(config, request);
+    if (h?.ready || h?.ok) {
+      log(`agent-fleet service running → ${serviceUrl(config)}  (log: ${LOG})`);
       return;
     }
-    await new Promise((r) => setTimeout(r, 500));
+    await wait(500);
   }
-  console.log(`service installed, but the dashboard did not answer yet; check ${LOG}`);
+  log(`service installed, but the dashboard did not answer yet; check ${LOG}`);
 }
 
 export async function uninstall() {
@@ -91,5 +112,5 @@ export async function status(config) {
   const state = out.match(/^\s*state = (.*)$/m)?.[1] ?? "unknown";
   const pid = out.match(/^\s*pid = (\d+)/m)?.[1] ?? "-";
   const h = await health(config);
-  console.log(`service: ${state} (pid ${pid}) · dashboard ${h?.ok ? `ok, last collect ${h.collectMs} ms` : "not answering"} · plist ${PLIST}`);
+  console.log(`service: ${state} (pid ${pid}) · dashboard ${h?.ok ? `ok, last collect ${h.collectMs} ms` : h?.ready ? "available, data degraded or stale" : "not answering"} · plist ${PLIST}`);
 }

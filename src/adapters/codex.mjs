@@ -1,6 +1,7 @@
 import { join } from "node:path";
 import { edge, node } from "../model.mjs";
-import { fileCache, isoOrNull, listDir, parseJson, projectName, readHeadRecords, readTailRecords, statSafe } from "../util.mjs";
+import { readTurnState } from "../attention.mjs";
+import { fileCache, isoOrNull, listDir, mapConcurrent, parseJson, projectName, readHeadRecords, readTailRecords, statSafe } from "../util.mjs";
 import { readFile } from "node:fs/promises";
 
 /**
@@ -13,8 +14,8 @@ import { readFile } from "node:fs/promises";
  */
 
 const WORKING_MS = 3 * 60_000;
+const READ_CONCURRENCY = 8;
 const SURFACES = { codex_work_desktop: "app", "Codex Desktop": "app", codex_cli_rs: "cli", codex_exec: "exec", codex_vscode: "ide" };
-const LIFECYCLE = new Set(["task_started", "task_complete", "turn_aborted", "error"]);
 
 export function createCodexAdapter() {
   const headers = new Map(); // path -> parsed header (immutable)
@@ -41,11 +42,17 @@ export function createCodexAdapter() {
     const root = join(ctx.home, ".codex", "sessions");
     const files = new Set();
     const days = Math.ceil(ctx.windowMs / 86_400_000) + 1;
+    const dirs = [];
     for (let i = 0; i <= days; i++) {
       const d = new Date(ctx.now - i * 86_400_000);
       const dir = join(root, String(d.getFullYear()), String(d.getMonth() + 1).padStart(2, "0"), String(d.getDate()).padStart(2, "0"));
-      for (const f of await listDir(dir)) if (f.name.endsWith(".jsonl")) files.add(join(dir, f.name));
+      dirs.push(dir);
     }
+    const entries = await mapConcurrent(dirs, READ_CONCURRENCY, async (dir) => {
+      ctx.signal?.throwIfAborted();
+      return (await listDir(dir)).filter((f) => f.name.endsWith(".jsonl")).map((f) => join(dir, f.name));
+    });
+    for (const path of entries.flat()) files.add(path);
     for (const path of ctx.openFileOwners.keys()) if (path.startsWith(root)) files.add(path);
     return [...files];
   }
@@ -73,16 +80,14 @@ export function createCodexAdapter() {
     return h;
   }
 
-  async function lifecycle(path, st) {
+  async function lifecycle(path, st, isSubagent) {
     return tails.get(path, st, async () => {
       const tail = await readTailRecords(path, st.size, 64 * 1024);
-      let last = null;
       let model = null;
       for (const r of tail) {
-        if (r.type === "event_msg" && LIFECYCLE.has(r.payload?.type)) last = r.payload.type;
         if (r.type === "turn_context" && r.payload?.model) model = r.payload.model;
       }
-      return { last, model };
+      return { ...readTurnState(tail, "codex", st.mtimeMs, { humanAudience: !isSubagent }), model };
     });
   }
 
@@ -92,30 +97,33 @@ export function createCodexAdapter() {
     async collect(ctx) {
       const nodes = [];
       const edges = [];
-      const names = await threadTitles(ctx);
-      for (const path of await candidateFiles(ctx)) {
+      const [names, files] = await Promise.all([threadTitles(ctx), candidateFiles(ctx)]);
+      const sessions = await mapConcurrent(files, READ_CONCURRENCY, async (path) => {
+        ctx.signal?.throwIfAborted();
         const st = await statSafe(path);
-        if (!st) continue;
+        if (!st) return null;
         const ownerPid = ctx.openFileOwners.get(path) ?? null;
-        if (!ownerPid && ctx.now - st.mtimeMs > ctx.windowMs) continue;
+        if (!ownerPid && ctx.now - st.mtimeMs > ctx.windowMs) return null;
         const h = await header(path);
-        if (!h?.id) continue;
-        const lc = await lifecycle(path, st);
+        if (!h?.id) return null;
+        const lc = await lifecycle(path, st, Boolean(h.parentId));
         const fresh = ctx.now - st.mtimeMs < WORKING_MS;
         let status;
-        if ((lc.last === "task_started" && (ownerPid || fresh)) || (lc.last === null && fresh)) status = "working";
-        else if (ownerPid) status = h.parentId ? "idle" : "waiting";
-        else status = lc.last === "turn_aborted" || lc.last === "error" ? "failed" : "done";
+        if (lc.phase === "failed") status = "failed";
+        else if (["question", "approval"].includes(lc.attention?.kind)) status = "waiting";
+        else if (lc.phase === "active" && (ownerPid || fresh)) status = "working";
+        else status = ownerPid ? "idle" : "done";
         const owner = ownerPid ? ctx.procs.get(ownerPid) : null;
         const id = `codex:${h.id}`;
-        nodes.push(
-          node({
+        return {
+          node: node({
             id,
             agent: "codex",
             kind: h.parentId ? "subagent" : "session",
             title: names.get(h.id) ?? h.nickname ?? `codex ${h.id.slice(-8)}`,
             role: h.role ?? (h.parentId ? "subagent" : null),
             status,
+            attention: lc.attention,
             surface: SURFACES[h.originator] ?? h.originator,
             cwd: h.cwd,
             project: projectName(h.cwd),
@@ -127,8 +135,13 @@ export function createCodexAdapter() {
             source: path,
             meta: { nickname: h.nickname, depth: h.depth, cliVersion: h.cliVersion, host: owner ? owner.comm.split("/").slice(-1)[0] : null },
           }),
-        );
-        if (h.parentId) edges.push(edge(`codex:${h.parentId}`, id, "spawn", { at: h.startedAt, label: h.nickname }));
+          edge: h.parentId ? edge(`codex:${h.parentId}`, id, "spawn", { at: h.startedAt, label: h.nickname }) : null,
+        };
+      });
+      for (const session of sessions) {
+        if (!session) continue;
+        nodes.push(session.node);
+        if (session.edge) edges.push(session.edge);
       }
       const seen = new Set(nodes.map((n) => n.source));
       for (const p of headers.keys()) if (!seen.has(p)) headers.delete(p);

@@ -1,0 +1,31 @@
+import assert from "node:assert/strict";
+import { EventEmitter } from "node:events";
+import { test } from "node:test";
+import { createDashboardServer } from "../src/server.mjs";
+
+test("HTTP and SSE report fresh, degraded and stale data even with an unchanged graph", async (t) => {
+  let snap = { nodes: [], generatedAt: new Date().toISOString(), intervalMs: 4000, collectMs: 50, adapters: [] };
+  const events = new EventEmitter();
+  const server = createDashboardServer({ latest: () => snap, events }, {});
+  await new Promise(r => server.listen(0, "127.0.0.1", r));
+  const cancel = new AbortController();
+  t.after(() => { cancel.abort(); server.closeAllConnections(); server.close(); });
+  const base = `http://127.0.0.1:${server.address().port}`;
+  const fresh = await fetch(base + "/api/health");
+  assert.equal(fresh.headers.get("cache-control"), "no-store");
+  assert.equal((await fresh.json()).ok, true);
+  const stream = await fetch(base + "/api/events", { signal: cancel.signal });
+  const reader = stream.body.getReader();
+  const first = new TextDecoder().decode((await reader.read()).value);
+  assert.match(first, /event: snapshot/);
+  assert.match(first, /event: health/);
+  events.emit("health", { ok: false, degraded: true, adapters: [{ id: "fake", error: "fixture offline" }] });
+  const update = new TextDecoder().decode((await reader.read()).value);
+  assert.match(update, /fixture offline/);
+  assert.doesNotMatch(update, /event: snapshot/);
+  snap = { ...snap, generatedAt: new Date(Date.now() - 60_000).toISOString() };
+  const stale = await fetch(base + "/api/health").then(r => r.json());
+  assert.equal(stale.ready, true);
+  assert.equal(stale.ok, false);
+  assert.equal(stale.stale, true);
+});

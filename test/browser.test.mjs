@@ -13,7 +13,7 @@ import { promisify } from "node:util";
 import { connectPipe } from "../src/browser/cdp.mjs";
 import { browserCli } from "../src/browser/cli.mjs";
 import { browserUrl, chromeExecutable, displayUrl } from "../src/browser/chromium.mjs";
-import { browserSessionAllowed, pilotManifest, pilotRequest, receive, validatePilotDirectory, watchPilot } from "../src/browser/pilot.mjs";
+import { browserSessionAllowed, pilotDirectory, pilotManifest, pilotManifests, pilotRequest, receive, validatePilotDirectory, watchPilot } from "../src/browser/pilot.mjs";
 import { createDashboardServer } from "../src/server.mjs";
 
 const exec = promisify(execFile);
@@ -72,10 +72,10 @@ test("IPC disconnect before a reply fails promptly instead of hanging", async (t
 test("real isolated Chromium: terminal actions, observed clicks, live frames, navigation, cancellation and cleanup", { timeout: 90_000 }, async (t) => {
   try { await chromeExecutable(); } catch { t.skip("Chrome/Chromium is unavailable"); return; }
   const home = await mkdtemp("/tmp/af-browser-");
-  const browserDir = join(home, "pilot");
   const node = { id: "codex:browser-test", kind: "session", agent: "codex", cwd: home };
   const other = { ...node, id: "codex:other" };
-  const config = { home, host: "127.0.0.1", browserDir };
+  const config = { home, host: "127.0.0.1", browserDir: join(home, "pilot") };
+  const browserDir = pilotDirectory(config, node.id);
   let stopWatch = () => {};
   const sockets = new Set();
   const web = createServer((req, res) => {
@@ -94,6 +94,7 @@ test("real isolated Chromium: terminal actions, observed clicks, live frames, na
   t.after(async () => {
     stopWatch();
     await cli("stop", "--session", node.id).catch(() => {});
+    await cli("stop", "--session", other.id).catch(() => {});
     for (const socket of sockets) socket.destroy();
     dashboard.closeAllConnections(); web.closeAllConnections();
     await Promise.all([new Promise((resolve) => dashboard.close(resolve)), new Promise((resolve) => web.close(resolve))]);
@@ -108,8 +109,14 @@ test("real isolated Chromium: terminal actions, observed clicks, live frames, na
     assert.equal((await stat(browserDir)).mode & 0o777, 0o700);
     assert.equal((await stat(join(browserDir, "control.sock"))).mode & 0o777, 0o600);
     assert.equal((await cli("start", "--session", node.id)).existing, true);
-    await assert.rejects(cli("start", "--session", other.id), /another session/);
     await assert.rejects(pilotRequest(config, other.id, { action: "state" }), /No browser/);
+    const parallel = await cli("start", "--session", other.id, "--url", webUrl);
+    assert.notEqual(parallel.runId, result.runId);
+    assert.equal((await pilotManifests(config)).length, 2);
+    assert.equal(await pilotManifest(config), null, "an unspecified stop cannot choose among sessions");
+    assert.equal((await pilotRequest(config, node.id, { action: "status" })).state, "live");
+    await cli("stop", "--session", other.id);
+    assert.equal((await pilotRequest(config, node.id, { action: "status" })).state, "live");
   });
   await t.test("CLI can address a dashboard bound to IPv6 loopback", async () => {
     const ipv6 = createServer((_req, res) => res.end(JSON.stringify({ nodes: [] })));

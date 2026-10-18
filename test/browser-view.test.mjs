@@ -9,7 +9,7 @@ function fixture(t) {
   globalThis.document = { hidden: false, addEventListener: (name, fn) => listeners.set(name, fn), removeEventListener: (name) => listeners.delete(name) };
   const elements = new Map();
   const root = { hidden: true, innerHTML: "", querySelector(selector) {
-    if (!elements.has(selector)) elements.set(selector, { textContent: "", innerHTML: "", dataset: {}, src: "", removeAttribute(name) { this[name] = ""; } });
+    if (!elements.has(selector)) elements.set(selector, { textContent: "", innerHTML: "", dataset: {}, style: {}, src: "", removeAttribute(name) { this[name] = ""; } });
     return elements.get(selector);
   } };
   const sources = [];
@@ -29,9 +29,9 @@ test("click markers require the same run/document, a post-click frame, viewport 
   const now = Date.now();
   const click = { id: 1, documentId: 1, x: 100, y: 200, at: now - 100 };
   const status = live(1, { clicks: [click] });
-  assert.equal(visibleClicks(frame(), status).length, 1);
-  for (const badFrame of [frame(2), frame(1, { runId: "other" }), frame(1, { at: now - 101 })]) assert.equal(visibleClicks(badFrame, status).length, 0);
-  for (const badClick of [{ ...click, x: -1 }, { ...click, y: 800 }, { ...click, x: Infinity }, { ...click, at: now - 6000 }, { ...click, at: now + 1 }]) assert.equal(visibleClicks(frame(), { ...status, clicks: [badClick] }).length, 0);
+  assert.equal(visibleClicks(frame(), status, now).length, 1);
+  for (const badFrame of [frame(2), frame(1, { runId: "other" }), frame(1, { at: now - 101 })]) assert.equal(visibleClicks(badFrame, status, now).length, 0);
+  for (const badClick of [{ ...click, x: -1 }, { ...click, y: 800 }, { ...click, x: Infinity }, { ...click, at: now - 6000 }, { ...click, at: now + 1 }]) assert.equal(visibleClicks(frame(), { ...status, clicks: [badClick] }, now).length, 0);
 });
 
 test("changing session cancels streams and pending image decodes", (t) => {
@@ -53,6 +53,27 @@ test("changing session cancels streams and pending image decodes", (t) => {
   f.view.select(null); assert.equal(f.root.hidden, true); assert.equal(second.closed, true);
 });
 
+test("all discovered browser views are selectable without mixing images across sources", (t) => {
+  const f = fixture(t);
+  f.view.select("session");
+  const first = f.sources[0];
+  first.emit("sources", { sources: [{ id: "aa", label: "<First>" }, { id: "bb", label: "Second" }], selectedId: "aa" });
+  assert.equal(f.el(".browser-sources").hidden, false);
+  assert.ok(f.el(".browser-picker").innerHTML.includes("&lt;First&gt;"));
+  first.emit("status", live()); first.emit("frame", frame());
+  const lateImage = f.images.at(-1).onload;
+  f.el(".browser-picker").onchange({ target: { value: "bb" } });
+  assert.equal(first.closed, true);
+  assert.ok(f.sources[1].url.endsWith("?view=bb"));
+  lateImage(); assert.equal(f.el(".browser-image").src, "");
+  first.emit("sources", { sources: [], selectedId: null });
+  f.sources[1].emit("sources", { sources: [{ id: "bb", label: "Second" }], selectedId: "bb" });
+  assert.equal(f.el(".browser-sources").hidden, true);
+  f.visibility(true); f.visibility(false);
+  assert.ok(f.sources.at(-1).url.endsWith("?view=bb"));
+  f.view.select("other"); assert.ok(!f.sources.at(-1).url.includes("?view="));
+});
+
 test("navigation clears old frames and click rings; late frames from the previous document are ignored", (t) => {
   const f = fixture(t);
   f.view.select("session"); const source = f.sources[0];
@@ -62,10 +83,20 @@ test("navigation clears old frames and click rings; late frames from the previou
   source.emit("status", live(2, { state: "loading" }));
   assert.equal(f.el(".browser-image").src, ""); assert.equal(f.el(".browser-clicks").innerHTML, "");
   const count = f.images.length;
-  source.emit("frame", frame()); source.emit("frame", frame(2, { width: 900 }));
+  source.emit("frame", frame()); source.emit("frame", frame(2, { width: 9000 }));
   assert.equal(f.images.length, count);
   source.emit("status", live(2)); source.emit("frame", frame(2)); f.images.at(-1).onload();
   assert.ok(f.el(".browser-image").src);
+});
+
+test("existing browser frames retain their aspect ratio and click coordinates", (t) => {
+  const f = fixture(t);
+  f.view.select("existing"); const source = f.sources[0];
+  source.emit("status", live(1, { mode: "attached", clicks: [{ id: 1, documentId: 1, x: 400, y: 450, at: Date.now() }] }));
+  source.emit("frame", frame(1, { width: 800, height: 900 })); f.images.at(-1).onload();
+  assert.equal(f.el(".browser-screen").style.aspectRatio, "800 / 900");
+  assert.ok(f.el(".browser-clicks").innerHTML.includes("left:50%;top:50%"));
+  assert.ok(f.el(".browser-caption").textContent.includes("existing agent browser"));
 });
 
 test("disconnect invalidates late events immediately and reconnects with an empty view", (t) => {

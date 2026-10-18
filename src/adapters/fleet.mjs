@@ -1,6 +1,6 @@
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { edge, node } from "../model.mjs";
-import { ageMs, isoOrNull, listDir, projectName, readJson, statSafe } from "../util.mjs";
+import { ageMs, isoOrNull, listDir, mapConcurrent, projectName, readJson, statSafe } from "../util.mjs";
 
 /**
  * pi-agent-fleet DAG runs: <project>/.fleet/<name>-<ts>/{fleet.json, state.json, workers/<id>/*.jsonl}
@@ -11,26 +11,36 @@ import { ageMs, isoOrNull, listDir, projectName, readJson, statSafe } from "../u
 
 const HEARTBEAT_MS = 2 * 60_000;
 const RESCAN_MS = 60_000;
+const METADATA_CONCURRENCY = 16;
 const NODE_STATUS = { pending: "queued", running: "working", completed: "done", failed: "failed", skipped: "done", cancelled: "done" };
+
+// These project-local personal-data directories must never be traversed by fleet discovery.
+const isPrivatePath = (path) => /\/body-os\/(?:me|people|household)(?:\/|$)/.test(resolve(path));
 
 export function createFleetAdapter() {
   let scan = { at: 0, dirs: null, pending: null };
 
   async function scanRoots(ctx) {
     const found = new Set();
-    const visit = async (dir, depth) => {
-      for (const e of await listDir(dir)) {
-        if (!e.isDirectory()) continue;
-        if (e.name === ".fleet") {
-          found.add(join(dir, e.name));
-          continue;
+    let level = ctx.config.fleetRoots.map((dir) => ({ dir, depth: ctx.config.fleetScanDepth }));
+    while (level.length) {
+      const children = await mapConcurrent(level, METADATA_CONCURRENCY, async ({ dir, depth }) => {
+        if (isPrivatePath(dir)) return [];
+        const next = [];
+        for (const e of await listDir(dir)) {
+          if (!e.isDirectory()) continue;
+          if (e.name === ".fleet") {
+            found.add(join(dir, e.name));
+            continue;
+          }
+          if (depth <= 0 || e.name.startsWith(".") || e.name === "node_modules" || e.name === "target" || e.name === "dist") continue;
+          next.push({ dir: join(dir, e.name), depth: depth - 1 });
         }
-        if (depth <= 0 || e.name.startsWith(".") || e.name === "node_modules" || e.name === "target" || e.name === "dist") continue;
-        await visit(join(dir, e.name), depth - 1);
-      }
-    };
-    for (const root of ctx.config.fleetRoots) await visit(root, ctx.config.fleetScanDepth);
-    return [...found];
+        return next;
+      });
+      level = children.flat();
+    }
+    return [...found].sort();
   }
 
   /** Root scan is slow (big trees), so it refreshes in the background; live process cwds are checked every tick. */
@@ -43,12 +53,11 @@ export function createFleetAdapter() {
         .catch(() => (scan.pending = null));
     }
     const dirs = new Set(scan.dirs);
-    for (const p of ctx.procs.values()) {
-      if ((p.agent === "pi" || p.agent === "omp") && p.cwd) {
-        const d = join(p.cwd, ".fleet");
-        if (await statSafe(d)) dirs.add(d);
-      }
-    }
+    const liveDirs = [...new Set([...ctx.procs.values()]
+      .filter((p) => (p.agent === "pi" || p.agent === "omp") && p.cwd && !isPrivatePath(p.cwd))
+      .map((p) => join(p.cwd, ".fleet")))];
+    const liveStats = await mapConcurrent(liveDirs, METADATA_CONCURRENCY, statSafe);
+    for (let i = 0; i < liveDirs.length; i++) if (liveStats[i]?.isDirectory()) dirs.add(liveDirs[i]);
     return [...dirs];
   }
 
@@ -98,15 +107,17 @@ export function createFleetAdapter() {
 
           const stateNodes = state.nodes && typeof state.nodes === "object" ? state.nodes : {};
           const ids = new Set([...Object.keys(stateNodes), ...spec.workers.map((w) => w.id)]);
-          for (const wid of ids) {
+          const workersById = new Map();
+          for (const w of spec.workers) if (!workersById.has(w.id)) workersById.set(w.id, w);
+          const workers = await mapConcurrent([...ids], METADATA_CONCURRENCY, async (wid) => {
             const ws = stateNodes[wid] ?? {};
-            const w = spec.workers.find((x) => x.id === wid) ?? {};
+            const w = workersById.get(wid) ?? {};
             let status = ws.status ? NODE_STATUS[ws.status] ?? "idle" : "queued";
             if (status === "working" && fleetStatus === "stale") status = "stale";
             const nid = `${fleetId}#${wid}`;
             const lastSession = await newestJsonl(join(dir, "workers", wid));
-            out.nodes.push(
-              node({
+            return {
+              node: node({
                 id: nid,
                 agent: "fleet",
                 kind: "worker",
@@ -122,9 +133,12 @@ export function createFleetAdapter() {
                 source: lastSession?.path ?? null,
                 meta: { turns: ws.turns, tokens: ws.tokens, costUsd: round(ws.cost_usd_estimate), note: ws.status_note ?? null },
               }),
-            );
-            out.edges.push(edge(fleetId, nid, "spawn"));
-            for (const dep of Array.isArray(w.depends_on) ? w.depends_on : []) out.edges.push(edge(`${fleetId}#${dep}`, nid, "dependency", { label: "feeds" }));
+              edges: [edge(fleetId, nid, "spawn"), ...(Array.isArray(w.depends_on) ? w.depends_on : []).map((dep) => edge(`${fleetId}#${dep}`, nid, "dependency", { label: "feeds" }))],
+            };
+          });
+          for (const worker of workers) {
+            out.nodes.push(worker.node);
+            out.edges.push(...worker.edges);
           }
         }
       }
@@ -134,6 +148,7 @@ export function createFleetAdapter() {
 }
 
 async function newestJsonl(dir) {
+  if (isPrivatePath(dir)) return null;
   let best = null;
   for (const f of await listDir(dir)) {
     if (!f.name.endsWith(".jsonl")) continue;

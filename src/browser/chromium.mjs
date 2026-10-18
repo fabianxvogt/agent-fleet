@@ -58,7 +58,7 @@ export async function launchBrowser({ profile, executable, url = "about:blank" }
   let stopped = false;
   const acknowledgements = new Set();
   const page = (method, params = {}) => cdp.send(method, params, session);
-  const status = () => ({ state: stopped ? "stopped" : ready ? "live" : "loading", documentId, title, url: displayUrl(currentUrl), viewport: VIEWPORT, clicks: clicks.filter((c) => Date.now() - c.at < 6000), lastFrameAt: lastFrame?.at ?? null });
+  const status = () => ({ state: stopped ? "stopped" : ready ? "live" : "loading", mode: "managed", documentId, title, url: displayUrl(currentUrl), viewport: VIEWPORT, clicks: clicks.filter((c) => Date.now() - c.at < 6000), lastFrameAt: lastFrame?.at ?? null });
   const publishStatus = () => events.emit("status", status());
   const frame = (data, at = Date.now(), expectedDocument = documentId) => {
     if (!ready || stopped || expectedDocument !== documentId || at < documentStartedAt || lastFrame?.at > at || typeof data !== "string" || data.length > 2 * 1024 * 1024) return;
@@ -171,7 +171,7 @@ export async function launchBrowser({ profile, executable, url = "about:blank" }
     lastFrame: () => lastFrame,
     async command(command) {
       if (command.action === "open") return navigate(command.url);
-      if (command.action === "state") return { ...status(), text: String(await evaluate("document.body?.innerText ?? ''")).slice(0, 12000) };
+      if (command.action === "state") return { ...status(), text: await evaluate("String(document.body?.innerText ?? '').slice(0,12000)") };
       if (command.action === "click") {
         const previousClick = clickSequence;
         if (typeof command.selector !== "string" || command.selector.length > 1000) throw new Error("A CSS selector is required");

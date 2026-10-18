@@ -7,6 +7,7 @@ import { createClaudeAdapter } from "../src/adapters/claude.mjs";
 import { createCodexAdapter } from "../src/adapters/codex.mjs";
 import { createFleetAdapter } from "../src/adapters/fleet.mjs";
 import { createOmpAdapter } from "../src/adapters/omp.mjs";
+import { createPiAdapter } from "../src/adapters/pi.mjs";
 import { link } from "../src/linker.mjs";
 import { mergeEdges, mergeNodes } from "../src/model.mjs";
 import { classifyProcess } from "../src/procs.mjs";
@@ -79,6 +80,33 @@ test("claude: registry entry of a dead process is ignored", async () => {
   assert.equal(r.nodes.length, 0);
 });
 
+test("claude: child errors and completed replies override recency, and only explicit child asks need the human", async () => {
+  const home = await mkdtemp(join(tmpdir(), "af-claude-child-attention-"));
+  const proj = join(home, ".claude", "projects", "-w-app");
+  await put(join(home, ".claude", "sessions", "100.json"), { pid: 100, sessionId: "parent", cwd: "/w/app", status: "busy" });
+  await put(join(proj, "parent.jsonl"), jsonl({ type: "user", cwd: "/w/app", message: { content: "Build it" } }));
+  const child = join(proj, "parent", "subagents", "agent-child.jsonl");
+  const adapter = createClaudeAdapter();
+  const reply = (content, stop_reason = "end_turn", extra = {}) => ({ type: "assistant", timestamp: new Date(NOW - 1000).toISOString(), message: { content, stop_reason }, ...extra });
+  let iteration = 0;
+  for (const [record, status, kind] of [
+    [reply([], "error"), "failed", undefined],
+    [reply([], null, { isApiErrorMessage: true }), "failed", undefined],
+    [reply([{ type: "text", text: "Finished the implementation." }]), "done", "completed"],
+    [reply([{ type: "text", text: "Would you prefer A or B?" }]), "done", "completed"],
+    [reply([{ type: "tool_use", id: "q", name: "AskUserQuestion", input: {} }], "tool_use"), "waiting", "question"],
+  ]) {
+    await put(child, jsonl(record), NOW - 1000 + iteration++);
+    const collect = (now) => adapter.collect({ ...ctxFor(home, [proc(100, 1, "claude")]), now });
+    for (const now of [NOW, NOW + 120_000]) {
+      const result = await collect(now);
+      const n = result.nodes.find(n => n.id === "claude-sub:parent:agent-child");
+      assert.equal(n.status, status);
+      assert.equal(n.attention?.kind, kind);
+    }
+  }
+});
+
 test("codex: subagent thread links to its parent; open file means alive", async () => {
   const home = await mkdtemp(join(tmpdir(), "af-codex-"));
   const day = join(home, ".codex", "sessions", "2026", "10", "16");
@@ -91,11 +119,20 @@ test("codex: subagent thread links to its parent; open file means alive", async 
   const r = await createCodexAdapter().collect(ctxFor(home, [proc(300, 1, "codex")], owners));
   const byId = new Map(r.nodes.map((n) => [n.id, n]));
   assert.equal(byId.get("codex:p1").title, "Build the site");
-  assert.equal(byId.get("codex:p1").status, "waiting");
+  assert.equal(byId.get("codex:p1").status, "idle");
+  assert.equal(byId.get("codex:p1").attention.kind, "completed");
   assert.equal(byId.get("codex:p1").surface, "app");
   assert.equal(byId.get("codex:c1").status, "working");
   assert.equal(byId.get("codex:c1").role, "worker");
   assert.deepEqual(r.edges.map((e) => [e.kind, e.from, e.to]), [["spawn", "codex:p1", "codex:c1"]]);
+  await put(child, jsonl(
+    { type: "session_meta", payload: { id: "c1", parent_thread_id: "p1" } },
+    { type: "response_item", payload: { type: "message", role: "assistant", phase: "final", content: [{ type: "output_text", text: "Would you prefer A or B?" }] } },
+    { type: "event_msg", payload: { type: "task_complete" } },
+  ));
+  const completed = await createCodexAdapter().collect(ctxFor(home, [proc(300, 1, "codex")], owners));
+  assert.equal(completed.nodes.find(n => n.id === "codex:c1").status, "idle");
+  assert.equal(completed.nodes.find(n => n.id === "codex:c1").attention.kind, "completed", "subagent prose asks its parent, not necessarily the human");
 });
 
 test("omp: directory nesting becomes the L0/L1/L2 hierarchy", async () => {
@@ -118,6 +155,9 @@ test("omp: directory nesting becomes the L0/L1/L2 hierarchy", async () => {
   assert.equal(byId.get("omp:g1").role, "L2");
   assert.equal(byId.get("omp:g1").status, "idle", "old child of a live root is idle, not done");
   assert.deepEqual(r.edges.map((e) => [e.from, e.to]).sort(), [["omp:k1", "omp:g1"], ["omp:r1", "omp:k1"]]);
+  await put(join(proj, "2026-10-16T10-00-00-000Z_r1", "Scout.jsonl"), head("k1", "") + jsonl({ type: "message", message: { role: "assistant", stopReason: "stop", content: "Would you prefer A or B?" } }));
+  const completed = await createOmpAdapter().collect(ctxFor(home, [p]));
+  assert.equal(completed.nodes.find(n => n.id === "omp:k1").attention.kind, "completed");
 });
 
 test("fleet: workers, dependencies and stale controller detection", async () => {
@@ -189,4 +229,103 @@ test("collector: unknown statuses become idle and unknown edge kinds are dropped
   const snap = await c.collectOnce();
   assert.equal(snap.nodes.find((n) => n.id === "x:1").status, "idle");
   assert.equal(snap.edges.filter((e) => e.from === "x:1").length, 0);
+});
+
+test("pi: a process that starts a new session in the same cwd follows it", async () => {
+  const home = await mkdtemp(join(tmpdir(), "af-pi-switch-"));
+  const proj = join(home, ".pi", "agent", "sessions", "--w-daw--");
+  const head = (id) => jsonl({ type: "session", id, cwd: "/w/daw", timestamp: "2026-10-16T10:00:00Z" });
+  const p = proc(500, 1, "pi", { cwd: "/w/daw", etime: "05:00:00" });
+  const adapter = createPiAdapter();
+  await put(join(proj, "old.jsonl"), head("old"), NOW - 3 * 3_600_000);
+  let r = await adapter.collect(ctxFor(home, [p]));
+  assert.equal(r.nodes.find((n) => n.id === "pi:old").pid, 500);
+
+  await put(join(proj, "new.jsonl"), head("new"), NOW - 5_000); // e.g. /new inside the same pi process
+  r = await adapter.collect(ctxFor(home, [p]));
+  const byId = new Map(r.nodes.map((n) => [n.id, n]));
+  assert.equal(byId.get("pi:new").pid, 500, "the session being written gets the process");
+  assert.equal(byId.get("pi:new").status, "working");
+  assert.equal(byId.get("pi:old").status, "done");
+});
+
+test("pi: an open file from another project does not steal the process", async () => {
+  const home = await mkdtemp(join(tmpdir(), "af-pi-open-"));
+  const root = join(home, ".pi", "agent", "sessions");
+  const head = (id, cwd) => jsonl({ type: "session", id, cwd, timestamp: "2026-10-16T10:00:00Z" });
+  await put(join(root, "--w-a--", "mine.jsonl"), head("mine", "/w/a"), NOW - 60_000);
+  const other = join(root, "--w-b--", "other.jsonl");
+  await put(other, head("other", "/w/b"), NOW - 1_000);
+  const p = proc(600, 1, "pi", { cwd: "/w/a", etime: "01:00:00", openFiles: [other] });
+  const r = await createPiAdapter().collect(ctxFor(home, [p]));
+  const byId = new Map(r.nodes.map((n) => [n.id, n]));
+  assert.equal(byId.get("pi:mine").pid, 600);
+  assert.equal(byId.get("pi:other").pid, null);
+});
+
+test("claude: completed replies, explicit questions and answered questions have distinct states", async () => {
+  const home = await mkdtemp(join(tmpdir(), "af-claude-attention-"));
+  const file = join(home, ".claude", "projects", "-w-app", "sid.jsonl");
+  await put(join(home, ".claude", "sessions", "100.json"), { pid: 100, sessionId: "sid", cwd: "/w/app", status: "idle" });
+  const start = { type: "user", timestamp: "2026-10-16T11:00:00Z", cwd: "/w/app", message: { content: "Build it" } };
+  const reply = (content, stop_reason = "end_turn") => ({ type: "assistant", timestamp: "2026-10-16T11:59:00Z", message: { content, stop_reason } });
+  const request = reply([{ type: "tool_use", id: "q1", name: "AskUserQuestion", input: { questions: [{ question: "Private fixture question?" }] } }], "tool_use");
+  for (const [records, expectedStatus, expectedKind] of [
+    [[reply([{ type: "text", text: "Built and checked." }])], "idle", "completed"],
+    [[request], "waiting", "question"],
+    [[request, { type: "user", message: { content: [{ type: "tool_result", tool_use_id: "q1", content: "Option A" }] } }], "idle", undefined],
+    [[request, { type: "user", message: { content: "Continue with A" } }], "idle", undefined],
+    [[reply([{ type: "text", text: "Would you prefer A or B?" }])], "waiting", "question"],
+    [[reply([{ type: "text", text: "> Would you prefer A or B?" }])], "idle", "completed"],
+    [[reply([{ type: "text", text: "Would you prefer A or B?" }], null)], "idle", undefined],
+  ]) {
+    await put(file, jsonl(start, ...records));
+    const r = await createClaudeAdapter().collect(ctxFor(home, [proc(100, 1, "claude")]));
+    const n = r.nodes.find((n) => n.id === "claude:sid");
+    assert.equal(n.status, expectedStatus);
+    assert.equal(n.attention?.kind, expectedKind);
+    assert.ok(!JSON.stringify(n.attention).includes("Private fixture"));
+  }
+});
+
+test("codex: live ownership cannot hide failed turns, and new turns clear old attention", async () => {
+  const home = await mkdtemp(join(tmpdir(), "af-codex-attention-"));
+  const file = join(home, ".codex", "sessions", "2026", "10", "16", "rollout-sid.jsonl");
+  const start = { type: "session_meta", payload: { id: "sid", cwd: "/w/app" } };
+  const event = (type) => ({ type: "event_msg", timestamp: "2026-10-16T11:59:00Z", payload: { type } });
+  const request = { type: "response_item", timestamp: "2026-10-16T11:59:00Z", payload: { type: "function_call", name: "functions.request_user_input", call_id: "q1", arguments: "{}" } };
+  for (const [records, expectedStatus, expectedKind] of [
+    [[event("task_complete")], "idle", "completed"],
+    [[event("turn_aborted")], "failed", undefined],
+    [[event("error")], "failed", undefined],
+    [[event("task_started"), request], "waiting", "question"],
+    [[event("task_started"), request, { type: "response_item", payload: { type: "function_call_output", call_id: "q1", output: "Answered" } }], "working", undefined],
+    [[event("task_started"), request, event("task_started")], "working", undefined],
+    [[event("task_complete"), event("task_started")], "working", undefined],
+  ]) {
+    await put(file, jsonl(start, ...records));
+    const r = await createCodexAdapter().collect(ctxFor(home, [proc(300, 1, "codex")], new Map([[file, 300]])));
+    const n = r.nodes.find((n) => n.id === "codex:sid");
+    assert.equal(n.status, expectedStatus);
+    assert.equal(n.attention?.kind, expectedKind);
+  }
+});
+
+test("pi/omp: live old sessions are idle without an ask and explicit errors survive ownership", async () => {
+  for (const [agent, create] of [["pi", createPiAdapter], ["omp", createOmpAdapter]]) {
+    const home = await mkdtemp(join(tmpdir(), `af-${agent}-attention-`));
+    const file = join(home, `.${agent}`, "agent", "sessions", "-w-app", "sid.jsonl");
+    const start = { type: "session", id: "sid", cwd: "/w/app" };
+    for (const [message, status, kind] of [
+      [null, "idle", undefined],
+      [{ role: "assistant", stopReason: "stop", content: [{ type: "text", text: "Done." }] }, "idle", "completed"],
+      [{ role: "assistant", stopReason: "error", content: [] }, "failed", undefined],
+    ]) {
+      await put(file, jsonl(start, ...(message ? [{ type: "message", message }] : [])), NOW - 90_000);
+      const r = await create().collect(ctxFor(home, [proc(400, 1, agent, { cwd: "/w/app" })]));
+      const n = r.nodes.find((n) => n.id === `${agent}:sid`);
+      assert.equal(n.status, status);
+      assert.equal(n.attention?.kind, kind);
+    }
+  }
 });

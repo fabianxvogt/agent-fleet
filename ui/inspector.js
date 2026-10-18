@@ -186,6 +186,7 @@ export function createInspector(root, { fetcher = (...args) => fetch(...args), b
   });
   const timer = setInterval(() => { if (id && !document.hidden) void refresh(); }, 4000);
   return {
+    showTab(nextTab) { if (id && ["chat", "results", "live"].includes(nextTab)) { tab = nextTab; render({ reset: true }); } },
     select(nextId, nextStatus = null) {
       status = nextStatus;
       if (nextId === id) return;

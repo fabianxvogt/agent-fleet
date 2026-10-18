@@ -1,6 +1,7 @@
 import { join } from "node:path";
 import { edge, node } from "../model.mjs";
-import { ageMs, fileCache, isoOrNull, listDir, projectName, readHeadRecords, readJson, readTailRecords, statSafe, truncate } from "../util.mjs";
+import { readTurnState } from "../attention.mjs";
+import { ageMs, fileCache, isoOrNull, listDir, mapConcurrent, projectName, readHeadRecords, readJson, readTailRecords, statSafe, truncate } from "../util.mjs";
 
 /**
  * Claude Code, CLI and desktop app.
@@ -13,6 +14,7 @@ import { ageMs, fileCache, isoOrNull, listDir, projectName, readHeadRecords, rea
  */
 
 const SUBAGENT_ACTIVE_MS = 90_000;
+const READ_CONCURRENCY = 8;
 const SURFACES = { "claude-desktop": "desktop", cli: "cli", "sdk-cli": "sdk", "sdk-ts": "sdk", "sdk-py": "sdk" };
 
 const nodeId = (sessionId) => `claude:${sessionId}`;
@@ -21,39 +23,39 @@ export function createClaudeAdapter() {
   const desktopCache = fileCache();
   const headCache = fileCache();
   const metaCache = fileCache();
+  const childTails = fileCache();
 
   async function readRegistry(ctx) {
     const dir = join(ctx.home, ".claude", "sessions");
-    const out = [];
-    for (const entry of await listDir(dir)) {
-      if (!entry.name.endsWith(".json")) continue;
+    const entries = (await listDir(dir)).filter((entry) => entry.name.endsWith(".json"));
+    const records = await mapConcurrent(entries, READ_CONCURRENCY, async (entry) => {
+      ctx.signal?.throwIfAborted();
       const data = await readJson(join(dir, entry.name));
-      if (!data?.sessionId || !data.pid) continue;
+      if (!data?.sessionId || !data.pid) return null;
       const proc = ctx.procs.get(data.pid);
-      if (!proc || proc.agent !== "claude") continue; // stale registry file of a dead process
-      out.push({ ...data, file: join(dir, entry.name) });
-    }
-    return out;
+      if (!proc || proc.agent !== "claude") return null; // stale registry file of a dead process
+      return { ...data, file: join(dir, entry.name) };
+    });
+    return records.filter(Boolean);
   }
 
   async function readDesktop(ctx) {
     const root = join(ctx.home, "Library", "Application Support", "Claude", "claude-code-sessions");
-    const files = [];
-    for (const acct of await listDir(root)) {
-      if (!acct.isDirectory()) continue;
-      for (const org of await listDir(join(root, acct.name))) {
-        if (!org.isDirectory()) continue;
-        for (const f of await listDir(join(root, acct.name, org.name))) {
-          if (f.name.startsWith("local_") && f.name.endsWith(".json")) files.push(join(root, acct.name, org.name, f.name));
-        }
-      }
-    }
+    const accounts = (await listDir(root)).filter((acct) => acct.isDirectory());
+    const orgs = (await mapConcurrent(accounts, READ_CONCURRENCY, async (acct) => {
+      ctx.signal?.throwIfAborted();
+      return (await listDir(join(root, acct.name))).filter((org) => org.isDirectory()).map((org) => join(root, acct.name, org.name));
+    })).flat();
+    const files = (await mapConcurrent(orgs, READ_CONCURRENCY, async (dir) => {
+      ctx.signal?.throwIfAborted();
+      return (await listDir(dir)).filter((f) => f.name.startsWith("local_") && f.name.endsWith(".json")).map((f) => join(dir, f.name));
+    })).flat();
     const live = new Set(files);
     desktopCache.prune(live);
-    const out = [];
-    for (const file of files) {
+    const records = await mapConcurrent(files, READ_CONCURRENCY, async (file) => {
+      ctx.signal?.throwIfAborted();
       const st = await statSafe(file);
-      if (!st) continue;
+      if (!st) return null;
       const d = await desktopCache.get(file, st, async () => {
         const raw = await readJson(file);
         if (!raw) return null;
@@ -75,25 +77,21 @@ export function createClaudeAdapter() {
           file,
         };
       });
-      if (d) out.push(d);
-    }
-    return out;
+      return d;
+    });
+    return records.filter(Boolean);
   }
 
   /** Index of transcript files: sessionId -> { path, dirPath }. */
   async function indexTranscripts(ctx) {
     const root = join(ctx.home, ".claude", "projects");
-    const index = new Map();
-    for (const dir of await listDir(root)) {
-      if (!dir.isDirectory()) continue;
+    const dirs = (await listDir(root)).filter((dir) => dir.isDirectory());
+    const entries = await mapConcurrent(dirs, READ_CONCURRENCY, async (dir) => {
+      ctx.signal?.throwIfAborted();
       const dirPath = join(root, dir.name);
-      for (const f of await listDir(dirPath)) {
-        if (!f.name.endsWith(".jsonl")) continue;
-        const path = join(dirPath, f.name);
-        index.set(f.name.slice(0, -6), { path, dirPath });
-      }
-    }
-    return index;
+      return (await listDir(dirPath)).filter((f) => f.name.endsWith(".jsonl")).map((f) => [f.name.slice(0, -6), { path: join(dirPath, f.name), dirPath }]);
+    });
+    return new Map(entries.flat());
   }
 
   const completeHeads = new Map(); // path -> head records; a transcript's first records never change
@@ -105,8 +103,7 @@ export function createClaudeAdapter() {
     return head;
   }
 
-  async function transcriptInfo(path) {
-    const st = await statSafe(path);
+  async function transcriptInfo(path, st) {
     if (!st) return null;
     return headCache.get(path, st, async () => {
       const head = await headOf(path, st);
@@ -124,6 +121,7 @@ export function createClaudeAdapter() {
         lastActivityAt: isoOrNull(lastTs) ?? new Date(st.mtimeMs).toISOString(),
         title: titleRec?.customTitle ?? titleRec?.aiTitle ?? titleRec?.summary ?? null,
         model: model ?? null,
+        turn: readTurnState(tail, "claude", st.mtimeMs),
       };
     });
   }
@@ -132,6 +130,7 @@ export function createClaudeAdapter() {
     const dir = join(transcript.dirPath, sessionId, "subagents");
     const out = { nodes: [], edges: [] };
     for (const f of await listDir(dir)) {
+      ctx.signal?.throwIfAborted();
       if (!f.name.endsWith(".jsonl")) continue;
       const path = join(dir, f.name);
       const st = await statSafe(path);
@@ -140,7 +139,10 @@ export function createClaudeAdapter() {
       const metaPath = join(dir, `${agentId}.meta.json`);
       const metaSt = await statSafe(metaPath);
       const meta = metaSt ? await metaCache.get(metaPath, metaSt, () => readJson(metaPath)) : null;
+      const turn = await childTails.get(path, st, async () => readTurnState(await readTailRecords(path, st.size, 32 * 1024), "claude", st.mtimeMs, { humanAudience: false }));
       const active = ctx.now - st.mtimeMs < SUBAGENT_ACTIVE_MS && parentStatus !== "done";
+      const asks = ["question", "approval"].includes(turn.attention?.kind);
+      const status = turn.phase === "failed" ? "failed" : asks ? "waiting" : turn.phase === "completed" ? "done" : active ? "working" : "done";
       const id = `claude-sub:${sessionId}:${agentId}`;
       out.nodes.push(
         node({
@@ -149,7 +151,8 @@ export function createClaudeAdapter() {
           kind: "subagent",
           title: meta?.description ?? agentId,
           role: meta?.agentType ?? "subagent",
-          status: active ? "working" : "done",
+          status,
+          attention: turn.attention,
           surface: "in-process",
           cwd: transcript.cwd,
           project: projectName(transcript.cwd),
@@ -182,20 +185,26 @@ export function createClaudeAdapter() {
       for (const d of desktop) {
         if (d.cliSessionId && !d.isArchived && ageMs(ctx.now, d.lastActivityAt) < ctx.windowMs) ids.add(d.cliSessionId);
       }
-      await Promise.all(
-        [...transcripts].map(async ([sid, t]) => {
-          const st = await statSafe(t.path);
-          if (st && ctx.now - st.mtimeMs < ctx.windowMs) ids.add(sid);
-        }),
-      );
+      const observed = await mapConcurrent([...transcripts], READ_CONCURRENCY, async ([sid, t]) => {
+        ctx.signal?.throwIfAborted();
+        return [sid, await statSafe(t.path)];
+      });
+      const transcriptStats = new Map(observed);
+      for (const [sid, st] of observed) if (st && ctx.now - st.mtimeMs < ctx.windowMs) ids.add(sid);
 
-      for (const sid of ids) {
+      // Each session reads its own children sequentially, so nested fan-out stays bounded.
+      const sessions = await mapConcurrent([...ids], READ_CONCURRENCY, async (sid) => {
+        ctx.signal?.throwIfAborted();
+        const nodes = [];
+        const edges = [];
         const live = liveBySession.get(sid);
         const d = desktopBySession.get(sid);
         const t = transcripts.get(sid);
-        const info = t ? await transcriptInfo(t.path) : null;
+        const info = t ? await transcriptInfo(t.path, transcriptStats.get(sid)) : null;
         const cwd = live?.cwd ?? d?.cwd ?? info?.cwd ?? null;
-        const status = live ? (live.status === "busy" ? "working" : "waiting") : "done";
+        const turn = info?.turn;
+        const asks = ["question", "approval"].includes(turn?.attention?.kind);
+        const status = turn?.phase === "failed" ? "failed" : asks ? "waiting" : live ? (live.status === "busy" ? "working" : "idle") : "done";
         const entry = live?.entrypoint ?? info?.entrypoint ?? (d ? "claude-desktop" : null);
         nodes.push(
           node({
@@ -204,6 +213,7 @@ export function createClaudeAdapter() {
             kind: "session",
             title: d?.title ?? live?.name ?? info?.title ?? `claude ${sid.slice(0, 8)}`,
             status,
+            attention: status === "working" ? null : turn?.attention ?? null,
             surface: SURFACES[entry] ?? entry,
             cwd,
             project: projectName(cwd),
@@ -238,10 +248,16 @@ export function createClaudeAdapter() {
           nodes.push(...sub.nodes);
           edges.push(...sub.edges);
         }
+        return { nodes, edges };
+      });
+      for (const session of sessions) {
+        nodes.push(...session.nodes);
+        edges.push(...session.edges);
       }
 
       const seen = new Set([...nodes.map((n) => n.source), ...[...ids].map((sid) => transcripts.get(sid)?.path)].filter(Boolean));
       headCache.prune(seen);
+      childTails.prune(new Set(nodes.filter((n) => n.kind === "subagent").map((n) => n.source)));
       metaCache.prune(new Set(nodes.filter((n) => n.kind === "subagent").map((n) => n.source.replace(/\.jsonl$/, ".meta.json"))));
       for (const p of completeHeads.keys()) if (!seen.has(p)) completeHeads.delete(p);
 

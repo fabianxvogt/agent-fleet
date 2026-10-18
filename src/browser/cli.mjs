@@ -5,10 +5,15 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { browserUrl, chromeExecutable } from "./chromium.mjs";
 import { browserSessionAllowed, pilotDirectory, pilotManifest, pilotRequest, validatePilotDirectory } from "./pilot.mjs";
+import { externalProcess } from "./association.mjs";
+import { externalTargets } from "./external.mjs";
 
 export const BROWSER_HELP = `agent-fleet browser — managed terminal browser with a read-only live view
 
   browser start --session <node-id> [--url <http-url>]
+  browser targets --session <node-id> --endpoint <http://127.0.0.1:port> --browser-pid <pid>
+  browser attach --session <node-id> --endpoint <http://127.0.0.1:port> --browser-pid <pid> --target <page-id>
+  browser detach [--session <node-id>]
   browser open --session <node-id> --url <http-url>
   browser click --session <node-id> --selector <css-selector>
   browser fill --session <node-id> --selector <css-selector> --text <text>
@@ -16,31 +21,34 @@ export const BROWSER_HELP = `agent-fleet browser — managed terminal browser wi
   browser state --session <node-id>
   browser stop [--session <node-id>]
 
-Select that session in Agent Fleet and open Live. One managed browser at a time.
-It uses an isolated temporary profile; stopping removes that profile.
+Select any session in Agent Fleet and open Live. Different sessions can run browsers concurrently.
+Managed browsers use a temporary profile. Attached browsers remain controlled by their agent;
+detach/stop removes only the observer and leaves the existing browser running.
 For Codex, CODEX_THREAD_ID can supply the session when --session is omitted.`;
 
 export async function browserCli(config, args) {
   const [action, ...rest] = args;
   if (!action || action === "help" || action === "--help") { console.log(BROWSER_HELP); return; }
-  if (!["start", "open", "click", "fill", "scroll", "state", "stop"].includes(action)) throw new Error(BROWSER_HELP);
+  if (!["start", "attach", "targets", "detach", "open", "click", "fill", "scroll", "state", "stop"].includes(action)) throw new Error(BROWSER_HELP);
   const options = {};
   for (let i = 0; i < rest.length; i += 2) {
-    if (!/^--(?:session|url|selector|text|dy)$/.test(rest[i]) || rest[i + 1] === undefined) throw new Error(BROWSER_HELP);
+    if (!/^--(?:session|url|selector|text|dy|endpoint|target|browser-pid)$/.test(rest[i]) || rest[i + 1] === undefined) throw new Error(BROWSER_HELP);
     options[rest[i].slice(2)] = rest[i + 1];
   }
   let sessionId = options.session ?? (process.env.CODEX_THREAD_ID ? `codex:${process.env.CODEX_THREAD_ID}` : null);
-  const dir = pilotDirectory(config);
-  const current = await pilotManifest(config);
-  if (action === "stop" && !sessionId) sessionId = current?.sessionId;
+  const stopping = action === "stop" || action === "detach";
+  const current = await pilotManifest(config, sessionId);
+  if (stopping && !sessionId) sessionId = current?.sessionId;
   if (!sessionId || sessionId.length > 1000) throw new Error("Pass --session with the session's Agent Fleet node ID");
-  if (action !== "start") {
+  const dir = current?.directory ?? pilotDirectory(config, sessionId);
+  if (!["start", "attach", "targets"].includes(action)) {
+    if (action === "detach" && current?.mode !== "attached") throw new Error("Detach is only for an attached browser; use browser stop for a managed browser");
     try {
-      const result = await pilotRequest(config, sessionId, { action, ...options, sessionId });
-      if (action === "stop") {
+      const result = await pilotRequest(config, sessionId, { ...options, action: stopping ? "stop" : action, sessionId });
+      if (stopping) {
         let stopped = false;
         for (let i = 0; i < 100; i++) {
-          const manifest = await pilotManifest(config);
+          const manifest = await pilotManifest(config, sessionId);
           if (manifest && manifest.runId !== current?.runId) { stopped = true; break; }
           try { await stat(dir); } catch (error) { if (error.code === "ENOENT") { stopped = true; break; } throw error; }
           await new Promise((resolve) => setTimeout(resolve, 100));
@@ -50,7 +58,7 @@ export async function browserCli(config, args) {
       console.log(JSON.stringify(result, null, 2));
     }
     catch (error) {
-      if (action !== "stop" || !current || current.sessionId !== sessionId) throw error;
+      if (!stopping || !current || current.sessionId !== sessionId) throw error;
       try { process.kill(current.pid, 0); } catch (check) {
         if (check.code === "ESRCH") { await rm(dir, { recursive: true, force: true }); console.log(JSON.stringify({ stopped: true, stale: true })); return; }
       }
@@ -58,17 +66,26 @@ export async function browserCli(config, args) {
     }
     return;
   }
-  const url = browserUrl(options.url ?? "about:blank");
+  const url = action === "start" ? browserUrl(options.url ?? "about:blank") : undefined;
   validatePilotDirectory(dir);
-  const executable = await chromeExecutable();
+  const executable = action === "start" ? await chromeExecutable() : undefined;
   const host = config.host === "::1" ? "[::1]" : config.host;
   const response = await fetch(`http://${host}:${config.port}/api/snapshot`, { signal: AbortSignal.timeout(5000) });
   if (!response.ok) throw new Error("Agent Fleet must be running before starting a browser");
   const snapshot = await response.json();
   const node = snapshot.nodes?.find((n) => n.id === sessionId);
   if (!node || !await browserSessionAllowed(node)) throw new Error("The session is unknown or outside the browser pilot's allowed context");
+  let attached;
+  if (action !== "start") {
+    const process = await externalProcess(node, options.endpoint, options["browser-pid"]);
+    const targets = await externalTargets(options.endpoint);
+    if (action === "targets") { console.log(JSON.stringify({ sessionId, browserPid: process.pid, targets }, null, 2)); return; }
+    if (!targets.some((t) => t.id === options.target)) throw new Error("Pass an existing page target ID from browser targets");
+    attached = { endpoint: options.endpoint, targetId: options.target, process, node: { id: node.id, kind: node.kind, agent: node.agent, cwd: node.cwd, source: node.source } };
+  }
   if (current) {
-    if (current.sessionId !== sessionId) throw new Error("The browser pilot is already attached to another session; stop it first");
+    if (current.mode !== (attached ? "attached" : "managed") && !(action === "start" && !current.mode)) throw new Error("A different browser view is already bound; stop or detach it first");
+    if (attached && (current.targetId !== attached.targetId || current.endpoint !== attached.endpoint)) throw new Error("Another browser target is already bound; detach it first");
     console.log(JSON.stringify({ sessionId, existing: true, ...await pilotRequest(config, sessionId, { action: "status" }) }, null, 2));
     return;
   }
@@ -79,7 +96,7 @@ export async function browserCli(config, args) {
   let child;
   let spawnError;
   try {
-    await writeFile(join(dir, "launch.json"), JSON.stringify({ runId, sessionId, cwd: node.cwd, url, executable }), { mode: 0o600 });
+    await writeFile(join(dir, "launch.json"), JSON.stringify({ runId, sessionId, cwd: node.cwd, mode: attached ? "attached" : "managed", attached, url, executable }), { mode: 0o600 });
     const log = await open(join(dir, "runner.log"), "a", 0o600);
     try {
       child = spawn(process.execPath, [fileURLToPath(new URL("../../bin/browser-runner.mjs", import.meta.url)), dir], { detached: true, stdio: ["ignore", log.fd, log.fd] });
@@ -88,7 +105,7 @@ export async function browserCli(config, args) {
     } finally { await log.close(); }
     for (let i = 0; i < 80; i++) {
       await new Promise((resolve) => setTimeout(resolve, 200));
-      const manifest = await pilotManifest(config);
+      const manifest = await pilotManifest(config, sessionId);
       if (manifest?.runId === runId && manifest.state === "ready") {
         console.log(JSON.stringify({ sessionId, runId, ...await pilotRequest(config, sessionId, { action: "status" }) }, null, 2));
         return;
@@ -96,7 +113,7 @@ export async function browserCli(config, args) {
       if (manifest?.runId === runId && manifest.state === "failed") break;
       if (spawnError || child.exitCode !== null || child.signalCode !== null) break;
     }
-    throw new Error("Browser did not start. Check the private browser-pilot/runner.log file.");
+    throw new Error("Browser did not start. Check this session's private runner.log file.");
   } catch (error) {
     child?.kill();
     if (child?.pid && child.exitCode === null && child.signalCode === null) {
@@ -104,7 +121,7 @@ export async function browserCli(config, args) {
     }
     // A failed runner still needs a manifest so `browser stop` can recover it.
     if (!child?.pid) await rm(dir, { recursive: true, force: true });
-    else if (!await pilotManifest(config)) await writeFile(join(dir, "run.json"), JSON.stringify({ sessionId, runId, pid: child.pid, state: "failed" }), { mode: 0o600 });
+    else if (!await pilotManifest(config, sessionId)) await writeFile(join(dir, "run.json"), JSON.stringify({ sessionId, runId, pid: child.pid, state: "failed" }), { mode: 0o600 });
     throw error;
   }
 }

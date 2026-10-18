@@ -13,21 +13,31 @@
         <svg class="brand-mark" viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="12" r="2.6" /><circle cx="18" cy="5.5" r="2.2" /><circle cx="18" cy="18.5" r="2.2" /><path d="M7.4 11 15.9 6.4M7.4 13l8.5 4.6" /></svg>
         <span>Agent Fleet</span>
       </div>
-      <div class="pulse" id="pulse" title="Live connection"><span class="pulse-dot"></span><span id="pulse-text">connecting…</span></div>
+      <div class="pulse" id="pulse" title="Live connection" role="status"><span class="pulse-dot"></span><span id="pulse-text">connecting…</span></div>
       <div class="stats" id="stats"></div>
       <div class="spacer"></div>
+      <button id="attention-toggle" aria-controls="rail" aria-expanded="false">Attention</button>
       <div class="segmented" role="tablist" aria-label="Scope">
-        <button data-scope="live" class="on" role="tab">Live</button>
-        <button data-scope="all" role="tab" id="scope-all">Last 12 h</button>
+        <button data-scope="live" class="on" role="tab" aria-selected="true">Live</button>
+        <button data-scope="all" role="tab" aria-selected="false" id="scope-all">Last 12 h</button>
       </div>
-      <input id="search" type="search" placeholder="Filter title, project, model…" autocomplete="off" spellcheck="false" />
+      <input id="search" type="search" aria-label="Filter sessions" placeholder="Filter title, project, model…" autocomplete="off" spellcheck="false" />
     </header>
 
     <div class="shell">
-      <aside class="rail">
+      <aside class="rail" id="rail">
         <section>
-          <h2>Waiting for you <span class="count" id="waiting-count">0</span></h2>
+          <h2>Needs you <span class="count" id="waiting-count">0</span></h2>
           <ol id="waiting" class="waiting"></ol>
+        </section>
+        <section>
+          <h2>Failed <span class="count" id="failed-count">0</span></h2>
+          <ol id="failed" class="waiting"></ol>
+        </section>
+        <section>
+          <h2>Recently finished <span class="count" id="completed-count">0</span></h2>
+          <p class="section-hint">Answers and sessions · last 10 min</p>
+          <ol id="completed" class="waiting"></ol>
         </section>
         <section>
           <h2>Agents</h2>
@@ -46,7 +56,27 @@
         <section class="sources" id="sources"></section>
       </aside>
 
-      <main class="canvas" id="canvas">
+      <main class="workspace">
+        <div class="view-toolbar" aria-label="Session view and filters">
+          <div class="segmented" role="group" aria-label="View">
+            <button id="view-graph" data-view="graph" class="on" aria-pressed="true">Graph</button>
+            <button id="view-list" data-view="list" aria-pressed="false">List</button>
+          </div>
+          <label class="filter-field">Project<select id="project-filter" aria-label="Project"><option value="all">All projects</option></select></label>
+          <label class="filter-field">Status<select id="status-filter" aria-label="Status">
+            <option value="all">All statuses</option><option value="waiting">Needs you</option><option value="failed">Failed</option>
+            <option value="working">Working</option><option value="idle">Idle</option><option value="queued">Queued</option>
+            <option value="done">Done</option><option value="stale">Stale</option>
+          </select></label>
+          <button id="reset-filters" class="reset-filters" hidden>Reset filters</button>
+          <div id="graph-fold-controls" class="fold-controls" role="group" aria-label="Finished branches">
+            <button id="collapse-finished" disabled>Collapse finished</button>
+            <button id="expand-finished" disabled>Expand all</button>
+          </div>
+        </div>
+        <div class="view-summary"><span id="filter-summary" role="status"></span><span id="list-order" hidden>Latest activity first</span></div>
+      <div class="canvas" id="canvas">
+        <div id="data-notice" class="data-notice" hidden></div>
         <svg id="graph" xmlns="http://www.w3.org/2000/svg">
           <defs>
             <marker id="arrow-message" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" /></marker>
@@ -55,20 +85,25 @@
           </defs>
           <g id="viewport"></g>
         </svg>
-        <div class="empty" id="empty" hidden>
-          <p class="empty-title">No live agent sessions</p>
-          <p>Start Claude, Codex, OhMyPi or Pi anywhere on this Mac and it shows up here within a few seconds.</p>
+        <div id="session-list" class="session-list" aria-label="Session list" hidden>
+          <table class="session-table"><thead><tr><th scope="col">Session</th><th scope="col">Status</th><th scope="col">Activity</th></tr></thead><tbody id="session-rows"></tbody></table>
         </div>
-        <div class="zoom">
+        <div class="empty" id="empty" hidden>
+          <p class="empty-title" id="empty-title">No live agent sessions</p>
+          <p id="empty-description">Start Claude, Codex, OhMyPi or Pi anywhere on this Mac and it shows up here within a few seconds.</p>
+        </div>
+        <div class="zoom" id="graph-zoom">
           <button id="zoom-in" title="Zoom in">+</button>
           <button id="zoom-out" title="Zoom out">−</button>
           <button id="zoom-fit" title="Fit to screen">Fit</button>
         </div>
+      </div>
       </main>
 
       <aside class="panel" id="panel" hidden>
         <button class="panel-close" id="panel-close" aria-label="Close">×</button>
         <div id="panel-overview"></div>
+        <p id="panel-data-notice" class="attention-note stale-note" hidden>Showing last known activity. Waiting for a fresh update.</p>
         <div id="session-content"></div>
         <section id="session-live" aria-label="Live browser" hidden></section>
         <details class="session-metadata"><summary>Session details &amp; relations</summary><div id="panel-body"></div></details>

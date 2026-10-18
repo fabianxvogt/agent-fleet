@@ -1,3 +1,14 @@
 node_modules/
 .DS_Store
 *.log
+
+# Local credentials and configuration
+.env
+.env.*
+!.env.example
+.agent-fleet/
+
+# Generated native bundles and test output
+*.app/
+.build/
+coverage/

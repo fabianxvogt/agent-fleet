@@ -4,50 +4,80 @@ export const CARD_W = 240;
 export const CARD_H = 54;
 export const GAP_X = 56;
 export const ROW_H = 66;
-export const LANE_HEAD = 38;
+export const LANE_HEAD = 56;
 export const LANE_PAD = 18;
 export const LANE_GAP = 14;
 
-const LIVE = new Set(["working", "waiting", "idle", "queued", "stale"]);
-const STATUS_RANK = { working: 0, waiting: 1, stale: 2, idle: 3, queued: 4, failed: 5, done: 6 };
+const LIVE = new Set(["working", "waiting", "idle", "queued", "stale", "failed"]);
+const STATUS_RANK = { failed: 0, waiting: 1, working: 2, stale: 3, idle: 4, queued: 5, done: 6 };
 const TREE_EDGE_RANK = { spawn: 0, process: 1 };
 const RECENT_DONE_MS = 10 * 60_000;
+
+const projectValue = (n) => String(n.project ?? "");
+
+/** Full-snapshot inventory keeps filter alternatives available after selection. */
+export function projectOptions(snapshot) {
+  const counts = new Map();
+  for (const n of snapshot.nodes) {
+    const value = projectValue(n);
+    counts.set(value, (counts.get(value) ?? 0) + 1);
+  }
+  return [...counts].map(([value, count]) => ({ value, label: value || "Unknown project", count }))
+    .sort((a, b) => a.label.localeCompare(b.label, undefined, { numeric: true, sensitivity: "base" }) || a.value.localeCompare(b.value));
+}
+
+export function matchesFilters(n, { agents = null, query = "", project = null, status = null } = {}) {
+  const q = query.trim().toLowerCase();
+  return (!agents || agents.has(n.agent)) && (project === null || projectValue(n) === project) && (status === null || n.status === status)
+    && (!q || [n.title, n.project, n.role, n.model, n.agent, n.cwd].some((v) => v && String(v).toLowerCase().includes(q)));
+}
+
+/** Attention is separate from process liveness: a finished answer can belong to an idle session. */
+export function selectAttention(snapshot, { agents = null, query = "", project = null, status = null, now = Date.now() } = {}) {
+  const groups = { waiting: [], failed: [], completed: [] };
+  for (const n of snapshot.nodes) {
+    if (n.kind === "process" || n.meta?.placeholder || !matchesFilters(n, { agents, query, project, status })) continue;
+    if (n.status === "failed") groups.failed.push(n);
+    else if (n.status === "waiting") groups.waiting.push(n);
+    else if (n.status === "done" || n.attention?.kind === "completed") {
+      const age = now - Date.parse(n.attention?.at ?? n.lastActivityAt);
+      if (Number.isFinite(age) && age >= 0 && age < RECENT_DONE_MS) groups.completed.push(n);
+    }
+  }
+  for (const list of Object.values(groups)) list.sort((a, b) => (b.attention?.at ?? b.lastActivityAt ?? "").localeCompare(a.attention?.at ?? a.lastActivityAt ?? ""));
+  return groups;
+}
 
 /**
  * Pick what to show.
  *  live: live nodes, their ancestors (to keep trees connected) and children that finished in the last 10 min.
  *  all:  everything in the collector window.
  */
-export function selectVisible(snapshot, { scope = "live", agents = null, query = "", showParked = false, now = Date.now() } = {}) {
+export function selectVisible(snapshot, { scope = "live", agents = null, query = "", project = null, status = null, showParked = false, now = Date.now() } = {}) {
   const byId = new Map(snapshot.nodes.map((n) => [n.id, n]));
   const parentOf = treeParents(snapshot.nodes, snapshot.edges);
   const keep = new Set();
-  const q = query.trim().toLowerCase();
-  const matches = (n) => !q || [n.title, n.project, n.role, n.model, n.agent, n.cwd].some((v) => v && String(v).toLowerCase().includes(q));
-  const agentOk = (n) => !agents || agents.has(n.agent);
-
   const parked = new Map(); // project -> hidden parked count
   for (const n of snapshot.nodes) {
-    if (!agentOk(n) || !matches(n)) continue;
-    if (scope === "live" && !showParked && n.meta?.parked) {
+    if (!matchesFilters(n, { agents, query, project, status })) continue;
+    if (scope === "live" && !showParked && n.meta?.parked && !n.liveView?.available && !["failed", "waiting"].includes(n.status)) {
       parked.set(n.project ?? "unknown", (parked.get(n.project ?? "unknown") ?? 0) + 1);
       continue;
     }
     const recentDone = n.status !== "done" ? false : now - Date.parse(n.lastActivityAt ?? 0) < RECENT_DONE_MS;
     const p = byId.get(parentOf.get(n.id));
     const parentLive = p && LIVE.has(p.status) && (showParked || !p.meta?.parked);
-    if (scope === "all" || LIVE.has(n.status) || (recentDone && parentLive)) keep.add(n.id);
+    if (scope === "all" || LIVE.has(n.status) || n.liveView?.available || (recentDone && parentLive)) keep.add(n.id);
   }
-  // pull in ancestors so a live child never floats without its parent (even a parked one)
+  // Restore context only while every ancestor passes the explicit filters.
   for (const id of [...keep]) {
     let cur = parentOf.get(id);
     let guard = 0;
     while (cur && !keep.has(cur) && guard++ < 20) {
       const n = byId.get(cur);
-      if (n) {
-        keep.add(cur);
-        if (n.meta?.parked && parked.has(n.project ?? "unknown")) parked.set(n.project ?? "unknown", parked.get(n.project ?? "unknown") - 1);
-      }
+      if (!n || !matchesFilters(n, { agents, query, project, status })) break;
+      keep.add(cur);
+      if (n.meta?.parked && parked.has(n.project ?? "unknown")) parked.set(n.project ?? "unknown", parked.get(n.project ?? "unknown") - 1);
       cur = parentOf.get(cur);
     }
   }
@@ -83,6 +113,77 @@ export function treeParents(nodes, edges) {
   return parent;
 }
 
+const confidentlyFinished = (node) => node.kind !== "process" && !node.meta?.placeholder && !node.meta?.dataStale && !node.liveView?.available
+  && !["question", "approval"].includes(node.attention?.kind)
+  && (node.status === "done" || (node.status === "idle" && node.attention?.kind === "completed"));
+
+/** Summarize a forest from its leaves without recursion, including very deep agent trees. */
+function completionForest(nodes, parents, isFinished) {
+  const children = new Map();
+  for (const [child, parent] of parents) {
+    if (!children.has(parent)) children.set(parent, []);
+    children.get(parent).push(child);
+  }
+  const facts = new Map(nodes.map((node) => [node.id, { finished: isFinished(node), size: 1 }]));
+  const remaining = new Map([...children].map(([id, ids]) => [id, ids.length]));
+  const queue = nodes.filter((node) => !children.has(node.id)).map((node) => node.id);
+  for (let index = 0; index < queue.length; index++) {
+    const id = queue[index];
+    const parent = parents.get(id);
+    if (parent === undefined) continue;
+    const own = facts.get(id);
+    const ancestor = facts.get(parent);
+    ancestor.finished &&= own.finished;
+    ancestor.size += own.size;
+    remaining.set(parent, remaining.get(parent) - 1);
+    if (remaining.get(parent) === 0) queue.push(parent);
+  }
+  return { children, facts };
+}
+
+/**
+ * Hide confidently finished child branches, retaining their parent as the control.
+ * Check the full snapshot as well as the filtered tree: filtering out an active
+ * descendant or its preferred parent must never make that work look completed.
+ */
+export function collapseCompleted(snapshot, visible, collapsedParents = new Set()) {
+  const fullParents = treeParents(snapshot.nodes, snapshot.edges);
+  const full = completionForest(snapshot.nodes, fullParents, confidentlyFinished);
+  const parents = treeParents(visible.nodes, visible.edges);
+  const { children, facts } = completionForest(visible.nodes, parents, (node) => confidentlyFinished(node) && full.facts.get(node.id)?.finished === true);
+  const eligibleBranches = new Set();
+  const controls = new Map();
+  for (const [parent, ids] of children) {
+    let eligibleCount = 0;
+    for (const id of ids) {
+      if (!facts.get(id).finished) continue;
+      eligibleBranches.add(id);
+      eligibleCount += facts.get(id).size;
+    }
+    if (eligibleCount > 0) controls.set(parent, { eligibleCount, hiddenCount: 0 });
+  }
+
+  // Each hidden node records all folded ancestors, including controls that are
+  // themselves hidden, so selecting it can reopen the complete path in one step.
+  const hiddenBy = new Map();
+  const pending = visible.nodes.filter((node) => !parents.has(node.id)).map((node) => ({ id: node.id, ancestors: [] }));
+  for (let index = 0; index < pending.length; index++) {
+    const { id, ancestors } = pending[index];
+    if (ancestors.length) hiddenBy.set(id, ancestors);
+    const control = controls.get(id);
+    const folded = collapsedParents.has(id) && control;
+    // Only exposed controls own a hidden count; nested folds do not double-count.
+    if (folded && !ancestors.length) control.hiddenCount = control.eligibleCount;
+    for (const child of children.get(id) ?? []) {
+      pending.push({ id: child, ancestors: folded && eligibleBranches.has(child) ? [...ancestors, id] : ancestors });
+    }
+  }
+  const nodes = visible.nodes.filter((node) => !hiddenBy.has(node.id));
+  const ids = new Set(nodes.map((node) => node.id));
+  const edges = visible.edges.filter((edge) => ids.has(edge.from) && ids.has(edge.to));
+  return { nodes, edges, controls, hiddenBy };
+}
+
 const activity = (n) => Date.parse(n.lastActivityAt ?? 0) || 0;
 const byPriority = (a, b) => (STATUS_RANK[a.status] ?? 9) - (STATUS_RANK[b.status] ?? 9) || activity(b) - activity(a);
 
@@ -111,11 +212,12 @@ export function layout(nodes, edges, viewport = { width: 1600, height: 900 }, st
   const subtreeStats = new Map();
   const stats = (n) => {
     if (subtreeStats.has(n.id)) return subtreeStats.get(n.id);
-    const s = { working: n.status === "working" ? 1 : 0, waiting: n.status === "waiting" ? 1 : 0, last: activity(n), size: 1 };
+    const s = { working: n.status === "working" && !n.meta?.dataStale ? 1 : 0, waiting: n.status === "waiting" ? 1 : 0, failed: n.status === "failed" ? 1 : 0, last: activity(n), size: 1 };
     for (const c of children.get(n.id) ?? []) {
       const cs = stats(c);
       s.working += cs.working;
       s.waiting += cs.waiting;
+      s.failed += cs.failed;
       s.last = Math.max(s.last, cs.last);
       s.size += cs.size;
     }
@@ -127,11 +229,11 @@ export function layout(nodes, edges, viewport = { width: 1600, height: 900 }, st
     rs.sort((a, b) => stats(b).working - stats(a).working || byPriority(a, b));
     const agg = rs.reduce((acc, r) => {
       const s = stats(r);
-      return { working: acc.working + s.working, waiting: acc.waiting + s.waiting, last: Math.max(acc.last, s.last), size: acc.size + s.size };
-    }, { working: 0, waiting: 0, last: 0, size: 0 });
+      return { working: acc.working + s.working, waiting: acc.waiting + s.waiting, failed: acc.failed + s.failed, last: Math.max(acc.last, s.last), size: acc.size + s.size };
+    }, { working: 0, waiting: 0, failed: 0, last: 0, size: 0 });
     return { project, roots: rs, ...agg };
   });
-  lanes.sort((a, b) => (b.working > 0) - (a.working > 0) || b.waiting - a.waiting || b.last - a.last);
+  lanes.sort((a, b) => b.failed - a.failed || b.waiting - a.waiting || (b.working > 0) - (a.working > 0) || b.last - a.last);
   // Sticky order: lanes keep the rank they had on the previous render so the picture does not jump on updates.
   if (sticky.order?.length) {
     const rank = new Map(sticky.order.map((p, i) => [p, i]));
@@ -187,7 +289,7 @@ export function layout(nodes, edges, viewport = { width: 1600, height: 900 }, st
   const pos = new Map();
   const laneRects = [];
   for (const { lane, x, y, width } of best?.placed ?? []) {
-    laneRects.push({ project: lane.project, x, y, width, height: lane.h, working: lane.working, waiting: lane.waiting, size: lane.size });
+    laneRects.push({ project: lane.project, x, y, width, height: lane.h, working: lane.working, waiting: lane.waiting, failed: lane.failed, size: lane.size });
     lane.origin = { x, y };
   }
   for (const [id, p] of local) pos.set(id, { x: p.lane.origin.x + p.x, y: p.lane.origin.y + p.y });

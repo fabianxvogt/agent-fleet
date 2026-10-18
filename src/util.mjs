@@ -1,10 +1,15 @@
 import { open, readdir, readFile, stat } from "node:fs/promises";
 import { basename, join } from "node:path";
 
+// Missing paths are routine during session rotation. Permissions, I/O and resource
+// failures must reach the collector so last-good data is not declared deleted.
+const missingPath = (error) => ["ENOENT", "ENOTDIR"].includes(error?.code);
+
 export async function statSafe(path) {
   try {
     return await stat(path);
-  } catch {
+  } catch (error) {
+    if (!missingPath(error)) throw error;
     return null;
   }
 }
@@ -12,7 +17,8 @@ export async function statSafe(path) {
 export async function listDir(path) {
   try {
     return await readdir(path, { withFileTypes: true });
-  } catch {
+  } catch (error) {
+    if (!missingPath(error)) throw error;
     return [];
   }
 }
@@ -20,9 +26,32 @@ export async function listDir(path) {
 export async function readJson(path) {
   try {
     return JSON.parse(await readFile(path, "utf8"));
-  } catch {
+  } catch (error) {
+    if (!missingPath(error) && !(error instanceof SyntaxError)) throw error;
     return null;
   }
+}
+
+/** Independent metadata reads, with bounded concurrency and stable result order. */
+export async function mapConcurrent(items, limit, mapper) {
+  if (!Number.isInteger(limit) || limit < 1) throw new RangeError("concurrency must be a positive integer");
+  const results = new Array(items.length);
+  let next = 0;
+  let failed = false;
+  let failure;
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (!failed && next < items.length) {
+      const index = next++;
+      try {
+        results[index] = await mapper(items[index], index);
+      } catch (error) {
+        if (!failed) failure = error;
+        failed = true;
+      }
+    }
+  }));
+  if (failed) throw failure;
+  return results;
 }
 
 export function parseJson(text) {
@@ -51,7 +80,8 @@ export async function readHeadRecords(path, maxLines = 4, maxBytes = 512 * 1024)
     const lines = text.split("\n");
     if (text.length === maxBytes) lines.pop(); // last line may be cut
     return lines.slice(0, maxLines).map(parseJson).filter(Boolean);
-  } catch {
+  } catch (error) {
+    if (!missingPath(error)) throw error;
     return [];
   }
 }
@@ -64,7 +94,8 @@ export async function readTailRecords(path, size, maxBytes = 48 * 1024) {
     const lines = text.split("\n");
     if (start > 0) lines.shift(); // first line may be cut
     return lines.map(parseJson).filter(Boolean);
-  } catch {
+  } catch (error) {
+    if (!missingPath(error)) throw error;
     return [];
   }
 }
