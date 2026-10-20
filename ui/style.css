@@ -231,8 +231,9 @@ button:focus-visible { outline: 2px solid var(--a-codex); outline-offset: 2px; }
 .attention-note { color: var(--muted); font-size: 12px; }
 .attention-note.stale-note { color: var(--s-stale); }
 .rel { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
-.rel li { padding: 7px 9px; border-radius: 8px; border: 1px solid var(--border); background: var(--surface-2); cursor: pointer; }
-.rel li:hover { border-color: var(--border-strong); }
+.relation-button { display: block; width: 100%; text-align: left; padding: 7px 9px; border-radius: 8px; border: 1px solid var(--border); background: var(--surface-2); color: var(--text); font: inherit; cursor: pointer; }
+.relation-button:hover { border-color: var(--border-strong); }
+.relation-button:focus-visible { outline: 2px solid var(--text); outline-offset: 2px; }
 .rel .k { font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.06em; font-weight: 650; }
 .rel .t { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .rel .note { display: block; color: var(--muted); font-size: 11.5px; margin-top: 2px; }

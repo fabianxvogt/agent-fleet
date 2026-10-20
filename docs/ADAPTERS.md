@@ -40,9 +40,31 @@ export default function create() {
   - `spawn` (parent started child) and `process` (inferred OS ancestry) build the tree.
   - `message`, `report` and `dependency` are drawn as extra arrows.
   - Set `inferred: true` for heuristics.
+  - Communication endpoints require unambiguous identity evidence. Do not turn a runtime display name, message body or shared working directory into a session ID. Counts describe observed events within the retained window; a report does not assert successful completion.
 - **Liveness:** prefer evidence over file recency. Good evidence is a pid in `ctx.procs`, a file in `ctx.openFileOwners`, or a heartbeat. Mark anything derived from mtime alone accordingly.
-- **Cost:** stay cheap on every tick. Cache file heads by path+mtime (`fileCache()` in `src/util.mjs`) and read tails, not whole files.
+- **Cost:** stay cheap on every tick. Use `fileCache()` in `src/util.mjs`, keyed by path and file revision (device, inode, change time, modification time and size), and read bounded heads/tails rather than whole files. A matching size and modification time alone do not prove that a source is the same file.
 - **Errors:** a failed/timed-out adapter retains its last successful data for at most `retainStaleMs` (default two minutes from observation), marked `meta.dataStale` with `dataObservedAt`. Source diagnostics include `lastSuccessAt` (completion), `observedAt` (captured process observation), `updating`, `stale`, `retained` and `error`. The collector adds `meta.dataSource` for UI freshness attribution. It never overlaps a timed-out invocation or accepts its late result. Honor `ctx.signal` where possible; stop also cancels reads. An explicit successful empty result removes previous nodes immediately.
 - **Deadlines:** defaults are 8 seconds per adapter and 10 seconds for process discovery, allowing loaded hosts to finish while still bounding hangs. Failed process discovery skips adapter interpretation rather than making every process appear dead. Freshness is independent of graph change; health becomes stale after `max(3 × intervalMs, 10 seconds)`.
 
 Sources publish independently as they finish. A slow adapter does not block fresh results or later reads from healthy adapters. The linker runs on each merged publication, adding process nodes for agent processes that no adapter has claimed, cross-tool ancestry edges and placeholder parents. A new adapter gets cross-tool links once its nodes carry a `pid`. In-flight results captured before a process-discovery failure are rejected even if discovery has since recovered.
+
+## OMP relations and branched sessions
+
+The OMP reader uses [session-relations.mjs](../src/adapters/session-relations.mjs)
+for structured IRC, terminal task reports and matched `l1_session` receipts.
+Session UUIDs and runtime worker IDs are distinct. Native aliases use exact
+filenames within a verified `parentSession` root; managed workers require exact
+known session/output paths from successful receipts. The resolver never reads
+result-file bodies or adds transcript text to graph metadata. See the
+[relation contract](RELATIONS.md) for supported events, bounds and omissions.
+
+Use [selectSessionBranch](../src/session-branch.mjs) consistently when deriving
+content, attention or relation evidence from Pi-format branches. OMP's late usage
+rows can specify `activeLeafId`; they must not resurrect the usage owner's
+abandoned branch. A missing selected leaf stays unknown. Preserve this behavior
+in any new reader or cache.
+
+The details API keeps local content revisions opaque and separates branch-
+unverified OMP/Pi/fleet archive history from current content. Archive messages
+must not restore an old branch's current activity or file associations. Existing
+Claude/Codex history merging remains separate from this runtime-specific rule.

@@ -1,11 +1,41 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import * as util from "../src/util.mjs";
-import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, rename, rm, stat, utimes, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
 const tick = () => new Promise((resolve) => setImmediate(resolve));
+
+test("file caches refresh replaced sources even when size and modification time are preserved", async (t) => {
+  const dir = await mkdtemp(join(tmpdir(), "af-cache-"));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const source = join(dir, "session.jsonl");
+  const replacement = join(dir, "replacement.jsonl");
+  const at = new Date("2026-10-20T12:00:00Z");
+  await writeFile(source, '{"id":"old"}\n');
+  await utimes(source, at, at);
+  const cache = util.fileCache();
+  let reads = 0;
+  const read = async () => { reads++; return readFile(source, "utf8"); };
+  const before = await stat(source);
+  assert.equal(await cache.get(source, before, read), '{"id":"old"}\n');
+  assert.equal(await cache.get(source, await stat(source), read), '{"id":"old"}\n');
+  assert.equal(reads, 1, "unchanged files still use the cache");
+
+  await writeFile(replacement, '{"id":"new"}\n');
+  await utimes(replacement, at, at);
+  await rename(replacement, source);
+  const after = await stat(source);
+  assert.equal(after.size, before.size);
+  assert.equal(after.mtimeMs, before.mtimeMs);
+  assert.notEqual(after.ino, before.ino);
+  assert.equal(await cache.get(source, after, read), '{"id":"new"}\n');
+  assert.equal(reads, 2);
+  cache.prune(new Set());
+  assert.equal(await cache.get(source, after, read), '{"id":"new"}\n');
+  assert.equal(reads, 3, "pruned entries are read again");
+});
 
 test("metadata concurrency is bounded and preserves input order", async () => {
   let active = 0;

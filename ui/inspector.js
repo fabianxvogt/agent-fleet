@@ -86,9 +86,12 @@ export function createInspector(root, { fetcher = (...args) => fetch(...args), b
   let artifactState = "available";
   let artifactRoot = null;
   let artifactView = null;
+  let branchScoped = false;
+  let localRevision = null;
+  let resetArchiveDisclosure = false;
 
   function render({ reset = false, prepend = false } = {}) {
-    const next = JSON.stringify([id, tab, history, recent, local, archive, oldest, loading, loadingOlder, error, status, session, recentLimited, gapUntil, artifacts, artifactState]);
+    const next = JSON.stringify([id, tab, history, recent, local, archive, oldest, loading, loadingOlder, error, status, session, recentLimited, gapUntil, artifacts, artifactState, branchScoped, localRevision]);
     if (!reset && signature === next) return;
     signature = next;
     const thread = root.querySelector(".session-thread");
@@ -96,8 +99,14 @@ export function createInspector(root, { fetcher = (...args) => fetch(...args), b
     const scrollHeight = thread?.scrollHeight ?? 0;
     const atBottom = !thread || scrollHeight - scrollTop - thread.clientHeight < 60;
     const expanded = new Set([...root.querySelectorAll("details[data-entry][open]")].map((d) => d.dataset.entry));
+    const archiveWasOpen = !resetArchiveDisclosure && Boolean(root.querySelector("[data-archive-history]")?.open);
+    resetArchiveDisclosure = false;
+    const focused = root.ownerDocument?.activeElement;
+    const focusedArchive = focused?.closest?.("[data-archive-history]");
+    const archiveFocus = focusedArchive && root.contains(focusedArchive)
+      ? focused.matches("summary") ? "summary" : focused.matches("[data-load-history]") ? "[data-load-history]" : null : null;
     const artifactFocus = artifactView?.captureFocus?.();
-    const entries = mergeContent(history, recent);
+    const entries = mergeContent(branchScoped ? [] : history, recent);
     const results = entries.filter((e) => e.kind === "tool" ? e.text !== null : e.role === "assistant" && e.final);
     // Archived messages do not have a final-phase flag. Show the latest agent
     // response as a response, without claiming it is the session's final result.
@@ -105,8 +114,16 @@ export function createInspector(root, { fetcher = (...args) => fetch(...args), b
     if (latestReply && !results.some((e) => e.id === latestReply.id)) results.push(latestReply);
     const shown = tab === "results" ? results : entries;
     const activity = local?.activity;
-    const observation = activity ?? (latestReply ? { label: "Last archived response", detail: latestReply.text.slice(0, 220), at: latestReply.at } : null);
+    const observation = activity ?? (latestReply ? { label: branchScoped ? "Last recorded response" : "Last archived response", detail: latestReply.text.slice(0, 220), at: latestReply.at } : null);
     const note = archive && ARCHIVE_NOTE[archive.state];
+    const loadHistory = oldest?.hasMore ? `<button class="load-history" data-load-history ${loading || loadingOlder ? "disabled" : ""}>${loadingOlder ? "Loading earlier messages…" : "Load earlier messages"}</button>` : "";
+    const archiveDisclosure = branchScoped && tab === "chat" && (history.length || oldest?.hasMore || archive?.state === "available") ? `
+      <details class="archive-history" data-archive-history>
+        <summary>Archive history <span>${history.length}</span></summary>
+        <p class="inspector-note">These older messages may belong to another conversation branch.</p>
+        ${loadHistory}
+        ${history.length ? history.map((entry) => renderEntry({ ...entry, origin: "archive" })).join("") : '<p class="inspector-empty">No archive messages loaded.</p>'}
+      </details>` : "";
     root.innerHTML = `
       ${tab !== "live" ? `<section class="current-activity" aria-label="Current activity">
         <div class="inspector-eyebrow">${activity ? "Last observed activity" : "Activity"}<span>${esc(status ?? "")}</span></div>
@@ -120,10 +137,11 @@ export function createInspector(root, { fetcher = (...args) => fetch(...args), b
         <button role="tab" data-content-tab="live" aria-selected="${tab === "live"}">Live</button>
         <button class="inspector-refresh" data-inspector-refresh aria-label="Refresh session" ${loading || loadingOlder ? "disabled" : ""}>↻</button>
       </div>
-      <div class="inspector-note" role="status">${esc(error ?? note ?? (loading ? "Updating…" : local?.truncated ? "Recent log window shown; older messages come from the archive." : local?.state === "available" ? "Recent events from the session log; history from the archive." : "History from the archive; current log activity is unavailable."))}${gapUntil !== null ? " Some archive messages are not loaded yet; load earlier messages to fill the gap." : ""}${recentLimited ? " Local view is limited to 400 events; use the archive for older history." : ""}</div>
+      <div class="inspector-note" role="status">${esc(error ?? note ?? (loading ? "Updating…" : branchScoped ? local?.state === "available" ? "Current conversation from the session log. Older archive history is kept separately." : "Current conversation could not be refreshed. Previously recorded activity is retained." : local?.truncated ? "Recent log window shown; older messages come from the archive." : local?.state === "available" ? "Recent events from the session log; history from the archive." : "History from the archive; current log activity is unavailable."))}${gapUntil !== null ? " Some archive messages are not loaded yet; load earlier messages to fill the gap." : ""}${recentLimited ? " Local view is limited to 400 events; use the archive for older history." : ""}</div>
       <div class="session-thread" role="region" aria-label="${tab === "chat" ? "Chat history" : "Session results"}" tabindex="0" aria-busy="${loading || loadingOlder}">
-        ${oldest?.hasMore ? `<button class="load-history" data-load-history ${loading || loadingOlder ? "disabled" : ""}>${loadingOlder ? "Loading earlier messages…" : "Load earlier messages"}</button>` : ""}
-        ${shown.length ? shown.map(renderEntry).join("") : `<p class="inspector-empty">${loading ? "Loading session content…" : tab === "results" ? "No results observed yet." : "No messages available yet."}</p>`}
+        ${branchScoped ? "" : loadHistory}
+        ${shown.length ? shown.map(renderEntry).join("") : `<p class="inspector-empty">${loading ? "Loading session content…" : tab === "results" ? "No results observed yet." : branchScoped ? "No messages observed in the current conversation." : "No messages available yet."}</p>`}
+        ${archiveDisclosure}
       </div>
       <section class="session-artifacts" aria-label="Session files"></section>`;
     const placeholder = root.querySelector(".session-artifacts");
@@ -138,6 +156,15 @@ export function createInspector(root, { fetcher = (...args) => fetch(...args), b
       restricted: local?.state === "restricted" || archive?.state === "restricted",
     });
     artifactView.restoreFocus?.(artifactFocus);
+    const nextArchive = root.querySelector("[data-archive-history]");
+    if (nextArchive) {
+      nextArchive.open = archiveWasOpen;
+      if (archiveFocus) {
+        const control = nextArchive.querySelector(archiveFocus);
+        const target = control && !control.disabled && (archiveFocus === "summary" || archiveWasOpen) ? control : nextArchive.querySelector("summary");
+        target?.focus({ preventScroll: true });
+      }
+    }
     for (const d of root.querySelectorAll("details[data-entry]")) if (expanded.has(d.dataset.entry)) d.open = true;
     const nextThread = root.querySelector(".session-thread");
     if (reset || atBottom && !prepend) nextThread.scrollTop = nextThread.scrollHeight;
@@ -157,6 +184,7 @@ export function createInspector(root, { fetcher = (...args) => fetch(...args), b
     controller = new AbortController();
     const requestController = controller;
     const timeout = setTimeout(() => requestController.abort(), 12_000);
+    let branchChanged = false;
     if (older) loadingOlder = true;
     else loading = true;
     error = null;
@@ -174,6 +202,16 @@ export function createInspector(root, { fetcher = (...args) => fetch(...args), b
       // The registry includes older observed associations; it is authoritative
       // for removals and revocations as well as newly loaded history pages.
       artifacts = artifactState === "unavailable" ? [] : Array.isArray(data.artifacts) ? data.artifacts : [];
+      const nextBranchScoped = data.branchScoped === true;
+      const nextLocalRevision = typeof data.local?.revision === "string" ? data.local.revision : null;
+      branchChanged = branchScoped !== nextBranchScoped || nextBranchScoped && data.local?.state === "available" &&
+        (nextLocalRevision === null || localRevision !== nextLocalRevision);
+      branchScoped = nextBranchScoped;
+      if (branchChanged) {
+        recent = []; recentLimited = false; local = null;
+        history = []; oldest = null; gapUntil = null; historyRevision = null;
+        resetArchiveDisclosure = true;
+      }
       // Revocation applies to every response, including an older-page request.
       // Do not retain content from a context or archive whose identity failed.
       const restricted = data.local?.state === "restricted" || data.archive.state === "restricted";
@@ -183,24 +221,40 @@ export function createInspector(root, { fetcher = (...args) => fetch(...args), b
         if (restricted) {
           artifacts = [];
           recent = []; recentLimited = false;
+          localRevision = null;
           local = { state: "restricted", entries: [], activity: null };
           archive = { state: "restricted", entries: [], hasMore: false };
           return;
         }
-        if (older) return;
+        if (older && !branchScoped) return;
+      }
+      // Branch-aware pagination also refreshes the selected local branch.
+      // Available empty content is authoritative; unavailable content retains
+      // the last known view without inventing continuity.
+      if (!older || branchScoped) {
+        if (data.local?.state === "available") {
+          local = data.local;
+          localRevision = branchScoped ? nextLocalRevision : null;
+          const accumulated = mergeContent(recent, data.local.entries ?? []);
+          recentLimited = recentLimited || accumulated.length > 400;
+          recent = accumulated.slice(-400);
+        } else if (data.local) {
+          local = branchScoped ? { ...data.local, activity: local?.activity ?? null, updatedAt: local?.updatedAt ?? data.local.updatedAt } : data.local;
+        }
       }
       if (older) {
+        archive = data.archive;
         if (data.archive.state !== "available") throw new Error(ARCHIVE_NOTE[data.archive.state] ?? "Earlier messages could not be loaded.");
+        if (historyRevision !== data.archive.revision) {
+          history = []; oldest = null; gapUntil = null;
+          historyRevision = data.archive.revision;
+        }
         const known = new Set(history.map((e) => e.id));
         history = [...data.archive.entries.filter((e) => !known.has(e.id)), ...history];
         oldest = data.archive;
         const first = Math.min(...data.archive.entries.map((e) => e.ordinal).filter(Number.isSafeInteger));
         if (!oldest.hasMore || first <= gapUntil + 1) gapUntil = null;
       } else {
-        local = data.local;
-        const accumulated = mergeContent(recent, data.local?.entries ?? []);
-        recentLimited = recentLimited || accumulated.length > 400;
-        recent = accumulated.slice(-400);
         archive = data.archive;
         if (data.archive.state === "available") {
           // Ordinals are meaningful only within the returned archive revision.
@@ -232,7 +286,7 @@ export function createInspector(root, { fetcher = (...args) => fetch(...args), b
       clearTimeout(timeout);
       if (epoch === generation) {
         loading = loadingOlder = false;
-        render({ prepend: older });
+        render({ reset: branchChanged, prepend: older && !branchChanged });
       }
     }
   }
@@ -242,7 +296,10 @@ export function createInspector(root, { fetcher = (...args) => fetch(...args), b
     if (!button) return;
     if (button.dataset.contentTab) { tab = button.dataset.contentTab; render({ reset: true }); }
     if (button.hasAttribute("data-load-history")) void refresh(true);
-    if (button.hasAttribute("data-inspector-refresh")) { history = []; oldest = null; gapUntil = null; historyRevision = null; void refresh(); }
+    if (button.hasAttribute("data-inspector-refresh")) {
+      if (!branchScoped) { history = []; oldest = null; gapUntil = null; historyRevision = null; }
+      void refresh();
+    }
   });
   const timer = setInterval(() => { if (id && !document.hidden) void refresh(); }, 4000);
   return {
@@ -258,6 +315,7 @@ export function createInspector(root, { fetcher = (...args) => fetch(...args), b
       tab = "chat";
       history = []; recent = []; local = archive = oldest = null;
       artifacts = []; artifactState = "available";
+      branchScoped = false; localRevision = null; resetArchiveDisclosure = true;
       loading = loadingOlder = false; error = null; signature = ""; recentLimited = false; gapUntil = null; historyRevision = null; observedAt = null;
       if (id) { render({ reset: true }); void refresh(); }
       else { root.innerHTML = ""; browserView?.select(null); artifactView?.select(null); }

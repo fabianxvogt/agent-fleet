@@ -1,4 +1,5 @@
 import { isoOrNull } from "./util.mjs";
+import { selectSessionBranch } from "./session-branch.mjs";
 
 const INPUT_TOOLS = new Set(["askuserquestion", "request_user_input", "request_user_input_async"]);
 const APPROVAL_EVENTS = new Set(["approval_request", "exec_approval_request", "apply_patch_approval_request"]);
@@ -26,15 +27,6 @@ function asksHuman(text) {
   // Requiring direct address/permission wording avoids generic/rhetorical questions
   // such as "Why bother?". This remains a heuristic, never explicit evidence.
   return /(?:^|[.!]\s+)(?:(?:would|could|can|will|do) you\b|(?:which|what|where|when|how)\b[^?]{0,100}\b(?:do|would|will|can) you\b|(?:shall|should|may|can) I\b|(?:soll|darf|kann) ich\b|(?:möchtest|willst|kannst|könntest|würdest|bevorzugst) du\b|(?:welche[rsnm]?|was|wo|wann|wie)\b[^?]{0,100}\b(?:möchtest|willst|bevorzugst|brauchst) du\b|(?:möchten|können|könnten|würden|bevorzugen) Sie\b)/iu.test(last);
-}
-
-function activeBranch(records, agent) {
-  if (!["pi", "omp"].includes(agent) || !records.some((r) => Object.hasOwn(r, "parentId"))) return records;
-  const byId = new Map(records.filter((r) => r.id).map((r) => [r.id, r]));
-  const keep = new Set();
-  let r = records.findLast((r) => r.id);
-  while (r && !keep.has(r.id)) { keep.add(r.id); r = byId.get(r.parentId); }
-  return records.filter((r) => keep.has(r.id));
 }
 
 /**
@@ -85,7 +77,7 @@ export function readTurnState(records, agent, fallbackAt = null, { humanAudience
     if (finished) finish(at);
   };
 
-  for (const r of activeBranch(records, agent)) {
+  for (const r of selectSessionBranch(records, agent).records) {
     const at = r.timestamp ?? r.message?.timestamp ?? fallbackAt;
     if (agent === "codex") {
       const p = r.payload ?? {};

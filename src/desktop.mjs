@@ -41,7 +41,7 @@ export async function installApp(config) {
       <key>CFBundleIdentifier</key><string>${bundleId}</string>
       <key>CFBundleName</key><string>Agent Fleet</string><key>CFBundleDisplayName</key><string>Agent Fleet</string>
       <key>CFBundleExecutable</key><string>AgentFleet</string><key>CFBundlePackageType</key><string>APPL</string>
-      <key>CFBundleShortVersionString</key><string>0.11.0</string><key>CFBundleVersion</key><string>12</string>
+      <key>CFBundleShortVersionString</key><string>0.12.0</string><key>CFBundleVersion</key><string>13</string>
       <key>CFBundleIconFile</key><string>AgentFleet</string><key>NSHighResolutionCapable</key><true/>
       <key>LSMinimumSystemVersion</key><string>13.0</string><key>NSPrincipalClass</key><string>NSApplication</string>
       <key>LSApplicationCategoryType</key><string>public.app-category.developer-tools</string>

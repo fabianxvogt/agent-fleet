@@ -182,6 +182,10 @@ export function createArtifactService(config, { now = Date.now } = {}) {
         if (!expected || expected.path !== observed.path || expected.dev !== String(observed.dev) || expected.ino !== String(observed.ino)) { revokeLocal(); local = null; }
       }
       if (local?.state === "available") {
+        if (["pi", "omp", "fleet"].includes(node.agent)) {
+          if (session.localRevision !== local.revision) revokeLocal();
+          session.localRevision = local.revision;
+        }
         const branch = local.branch;
         if (branch && typeof branch.head === "string" && Array.isArray(branch.ancestry)) {
           if (session.branchHead !== branch.head && !branch.ancestry.includes(session.branchHead)) revokeLocal();

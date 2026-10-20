@@ -4,7 +4,7 @@ Start the dashboard using the [quick start](../README.md#quick-start), or open t
 
 ## Graph and list
 
-**Graph** shows session relationships. Select a node to inspect its activity, chat, results and relations. Spawn and inferred process links show parent/child relationships; message and dependency links show other observed connections.
+**Graph** shows session relationships. Select a node to inspect its activity, chat, results and relations. Spawn and inferred process links show parent/child relationships; message, report and dependency links show other observed connections.
 
 **List** shows compact rows ordered by latest activity, including title, agent, project, status and activity age. Select a row for details or its **LIVE** button for the browser. The list uses normal scrolling. The chosen view is remembered across reopening; selection survives switching views.
 
@@ -64,7 +64,17 @@ Select a node or list row to open its inspector. Activity includes its observati
 
 Only the selected session's content refreshes, every four seconds while the dashboard tab is visible. Recent content comes from local logs. **Load earlier messages** requests archive history from the configured agentsview service; the refresh control reloads it. If agentsview is unavailable or the session is not indexed, recent local events remain readable. OpenCode process-only nodes currently have no transcript reader.
 
+For OMP, Pi and fleet, current Chat, Results and recorded Live activity follow the local transcript's active branch. Older archive messages appear under a separate collapsed **Archive history** disclosure because their branch cannot be verified. Expand it to read or load earlier archive messages; they do not become current activity or Results. It stays open across same-branch updates and closes when the branch changes. A detected branch switch or session-file replacement clears superseded local content; a read failure retains labeled last-known activity. Claude and Codex continue to combine supported local and archive history.
+
 Content availability follows the runtime's recorded events. The inspector excludes private thinking/reasoning and system records; it displays text rather than executing log content. Credential redaction is a secondary defense, not a guarantee that all sensitive text is removed.
+
+### Relations
+
+Within **Session details & relations**, relations appear before technical facts. Each row shows the other session, the connection's direction, observed count and recorded date/time. Click a row or use Enter/Space to inspect that session; keyboard focus survives ordinary updates.
+
+Supported OMP sessions can show worker starts, incoming messages, queued sends and returned reports. **Message queued** confirms the send receipt, not delivery or action. **Result received** can include failed or cancelled work. Counts cover events observed in the retained transcript window, not all-time totals, and can decrease when old evidence expires or the active branch changes.
+
+Unknown or ambiguous endpoints stay unlinked. See [Agent relations and branch consistency](RELATIONS.md) for supported OMP formats and current limits.
 
 ### Files in Results
 

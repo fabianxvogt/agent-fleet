@@ -100,12 +100,12 @@ export async function readTailRecords(path, size, maxBytes = 48 * 1024) {
   }
 }
 
-/** Cache keyed by path; recomputes only when mtime or size changes. */
+/** Cache keyed by path and file revision; replacement must not preserve stale identities. */
 export function fileCache() {
   const entries = new Map();
   return {
     async get(path, st, compute) {
-      const key = `${st.mtimeMs}:${st.size}`;
+      const key = `${st.dev}:${st.ino}:${st.ctimeMs}:${st.mtimeMs}:${st.size}`;
       const hit = entries.get(path);
       if (hit && hit.key === key) return hit.value;
       const value = await compute();

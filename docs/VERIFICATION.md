@@ -1,6 +1,26 @@
 # Verification and limitations
 
-Historical checks are grouped by feature and date. The latest release checks are for v0.11; older test counts and observations describe earlier revisions. See the [documentation index](README.md) for setup and usage.
+Historical checks are grouped by feature and date. The latest release checks are for v0.12; older test counts and observations describe earlier revisions. See the [documentation index](README.md) for setup and usage.
+
+## v0.12 agent relations and branch consistency — 2026-10-20
+
+Classification: **INCREMENTAL / EMPIRICAL**. OMP relations now use supported structured incoming messages, terminal task reports and matched successful managed L1 receipts. Runtime aliases resolve within verified session ownership; native header parent paths establish the hierarchy even for flat child directories. Start/launch receipts prove spawn, while list/status can establish managed ownership without claiming a launch. Managed workers cannot take their host's process assignment. Message bodies and result-file contents do not enter relation metadata. [Supported formats, exact bounds and provenance](RELATIONS.md) describe the contract inspected in OMP 18.12.3 and the local launcher.
+
+Relation buttons show direction, the other session, observed count, static evidence label and event time before raw session facts. Queued sends and received results are distinguished. Buttons use ordinary click/Enter/Space behavior, preserve focus across refreshes and reveal folded destinations through the existing selection path. Counts describe distinct retained observations, not lifetime totals or cross-protocol deduplication of physical deliveries.
+
+Content, attention, files and OMP relations share active-branch selection. A trailing OMP usage record honors `activeLeafId`, including explicit clearing and a selected leaf missing from the bounded tail. Duplicate IDs cannot reintroduce superseded records. Opaque local revisions reset retained inspector content on detected forks, gaps, source replacements and rewrites. Pi/OMP/fleet archive history remains separately expandable and does not supply current Chat, Results, Live or file evidence. Loading earlier pages also refreshes the local branch. Straight appends preserve retained messages, reading position and archive-control focus; read failures retain labeled last-known observations.
+
+Independent backend review corrected missing-header endpoints, cross-root and contradictory receipt mappings, status-only worker process ownership, flat-directory depth labels and unnecessary historical reads. An independent cold-scan probe opened none of 100 irrelevant historical transcripts. A source changed between bounded head/tail reads produces no communication edges. Shared file caches now include device, inode and change time so replacement with preserved size/modification time cannot reuse stale identities.
+
+Independent Inspector review reproduced growing in-place rewrites that retained old messages and file links. Overlapping record fingerprints and ancestry checks now revoke those revisions, and the file registry honors the same revocation. The file-association reproduction failed before its fix and passed afterward. Archive summary/pagination focus also survives refreshes. Remaining bound: rewrites entirely outside a truncated 1 MiB observed tail cannot be ruled out; no whole-file append integrity is claimed.
+
+Verification: **338 tests passed, zero failed or skipped**, with `npm test`, including isolated Chromium integrations and existing native download checks. Relevant regressions cover [OMP relations](../test/session-relations.test.mjs), [shared branches and file revocation](../test/session-branch.test.mjs), [details](../test/details.test.mjs), [Inspector](../test/inspector.test.mjs), [relation navigation](../test/navigation.test.mjs) and [cache identity](../test/util.test.mjs). Final independent backend and Inspector reviews have no remaining actionable findings.
+
+Synthetic browser checks verified relation navigation by Enter/Space, automatic reveal of a folded destination, relation/archival focus across polling, a separate expandable archive and explicit branch clearing with no abandoned response in Chat, Results or Live. No browser console warnings/errors were captured. Fixtures and proof images contain synthetic data only.
+
+Release checks: all **66 JavaScript files** passed syntax checks, local documentation links/anchors resolved, CLI help completed and `git diff --check` passed. The background service was reinstalled, and the native app rebuilt as **0.12.0 / build 13**. Its signature verifies; the reopened window shows Current, Graph/List and Project/Status filters. A post-install health observation was current and non-degraded, with a reported 120 ms collection and 11 ms OMP read. This is one health observation, not a latency or uptime guarantee. No real logout/login cycle was performed.
+
+Limits and next validation: ordinary OMP task/L1 exchanges and branch switches across runtime versions still need everyday coverage. `live-delegation` has no supported structured endpoint identity, arbitrary custom SDK root aliases remain unresolved, and result-file existence alone proves no delivery. Bounded tails/window expiry can remove old relations. Sustained host workloads and a real logout/login cycle remain separate validation.
 
 ## v0.11 files and readable Live — 2026-10-20
 

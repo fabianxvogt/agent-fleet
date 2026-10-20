@@ -507,7 +507,7 @@ function renderPanel() {
     const outgoing = e.from === n.id;
     const other = byId.get(outgoing ? e.to : e.from);
     if (!other) continue;
-    rels.push({ e, outgoing, other, label: relLabel(e.kind, outgoing) });
+    rels.push({ e, outgoing, other, label: relLabel(e.kind, outgoing), key: JSON.stringify([n.id, e.from, e.to, e.kind, Boolean(e.inferred)]) });
   }
   rels.sort((a, b) => (b.e.at ?? "").localeCompare(a.e.at ?? ""));
 
@@ -522,22 +522,29 @@ function renderPanel() {
     ${n.attention?.reason ? `<p class="attention-note">${esc(n.attention.reason)}${n.attention.evidence === "inferred" ? " · inferred from session activity" : ""}</p>` : ""}
     ${n.meta?.dataStale ? `<p class="attention-note stale-note">This source is unavailable. Activity shown is from its last successful update.</p>` : ""}`;
   inspector.select(n.id, `${n.meta?.dataStale ? "Last known: " : ""}${STATUS_LABEL[n.status] ?? n.status}`, { title: n.title, status: n.status, lastActivityAt: n.lastActivityAt, stale: Boolean(n.meta?.dataStale) });
+  const focusedRelation = document.activeElement?.closest?.("#panel-body button[data-relation]")?.dataset.relation;
   $("panel-body").innerHTML = `
-    ${actions.length ? `<div class="actions">${actions.join("")}</div>` : ""}
-    <dl class="facts">${facts.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${v}</dd>`).join("")}</dl>
     <h4>Relations (${rels.length})</h4>
     ${
       rels.length
         ? `<ul class="rel">${rels
             .map(
-              (r) => `<li data-id="${esc(r.other.id)}"><span class="k" style="color:var(--e-${r.e.kind === "spawn" ? "report" : safeKind(r.e.kind)})">${esc(r.label)}${r.e.count > 1 ? ` ×${r.e.count}` : ""}${r.e.inferred ? " · inferred" : ""}</span>
-                <span class="t">${esc(r.other.title)}</span>
-                ${r.e.label && r.e.kind === "report" ? `<span class="note">${esc(r.e.label)}</span>` : ""}
-                ${r.e.at ? `<span class="note">${esc(clock(r.e.at))}</span>` : ""}</li>`,
+              (r) => `<li><button type="button" class="relation-button" data-id="${esc(r.other.id)}" data-relation="${esc(r.key)}">
+                <span class="k" style="color:var(--e-${r.e.kind === "spawn" ? "report" : safeKind(r.e.kind)})">${esc(r.label)} ×${Number.isSafeInteger(r.e.count) && r.e.count > 0 ? r.e.count : 1}${r.e.inferred ? " · inferred" : ""}</span>
+                <span class="t" title="${esc(r.other.title)}">${esc(r.other.title)}</span>
+                ${r.e.label && ["message", "report"].includes(r.e.kind) ? `<span class="note">${esc(r.e.label)}</span>` : ""}
+                ${r.e.at && Number.isFinite(Date.parse(r.e.at)) ? `<time class="note" datetime="${esc(r.e.at)}">${esc(clock(r.e.at))}</time>` : `<span class="note">Time not recorded</span>`}
+              </button></li>`,
             )
             .join("")}</ul>`
         : `<p class="hint" style="color:var(--faint)">No known relations.</p>`
-    }`;
+    }
+    <h4>Session details</h4>
+    ${actions.length ? `<div class="actions">${actions.join("")}</div>` : ""}
+    <dl class="facts">${facts.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${v}</dd>`).join("")}</dl>`;
+  if (focusedRelation) {
+    [...$("panel-body").querySelectorAll("button[data-relation]")].find((button) => button.dataset.relation === focusedRelation)?.focus({ preventScroll: true });
+  }
 }
 
 function relLabel(kind, outgoing) {
@@ -834,8 +841,8 @@ function wire() {
       }
       return;
     }
-    const li = ev.target.closest("li[data-id]");
-    if (li) select(li.dataset.id, { center: true });
+    const relation = ev.target.closest("button[data-relation]");
+    if (relation) select(relation.dataset.id, { center: true });
   });
   document.addEventListener("keydown", (ev) => {
     if (ev.target.matches("input, select, textarea, button")) {

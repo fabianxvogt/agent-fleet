@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { isoOrNull, parseJson } from "./util.mjs";
+import { selectSessionBranch } from "./session-branch.mjs";
 
 const MAX_TEXT = 16_000;
 const MAX_TERMINAL_SESSIONS = 128;
@@ -380,17 +381,7 @@ export function localContent(records, agent) {
     activity = { label: `${t.name} ${t.status === "failed" ? "failed" : "returned"}`, detail: t.text.slice(0, 240), at: t.resultAt ?? t.at, status: t.status };
   };
 
-  // Pi/OMP session files can contain multiple branches. Follow the last record's
-  // parent chain where available rather than replaying abandoned branches.
-  if (["pi", "omp", "fleet"].includes(agent) && records.some((r) => Object.hasOwn(r, "parentId"))) {
-    const byId = new Map(records.filter((r) => r.id).map((r) => [r.id, r]));
-    const keep = new Set();
-    let r = records.findLast((r) => r.id);
-    const head = r?.id;
-    while (r && !keep.has(r.id)) { keep.add(r.id); r = byId.get(r.parentId); }
-    if (typeof head === "string") branch = { head, ancestry: [...keep].filter((id) => typeof id === "string") };
-    records = records.filter((r) => keep.has(r.id));
-  }
+  ({ records, branch } = selectSessionBranch(records, agent));
   const canonicalCodex = records.some((r) => r.type === "response_item" && r.payload?.type === "message" && !["analysis", "reasoning"].includes(r.payload.channel ?? r.payload.phase));
   for (const r of records) {
     const at = r.timestamp;

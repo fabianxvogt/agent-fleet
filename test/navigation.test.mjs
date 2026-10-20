@@ -25,6 +25,7 @@ function app(snap = snapshot(), preferences = {}) {
   let width = 1200;
   let height = 760;
   const eventHandlers = {};
+  const documentHandlers = {};
   let eventSource;
   let onTick;
   let now = NOW;
@@ -64,7 +65,7 @@ function app(snap = snapshot(), preferences = {}) {
     Date: class extends Date { static now() { return now; } },
     createInspector: () => ({ select(...args) { inspectorCalls++; selections.push(args); }, showTab(tab) { openedTabs.push(tab); } }),
     createLiveView: () => ({ select() {} }),
-    document: { getElementById: get, querySelectorAll: (selector) => selector === "[data-scope]" ? scopes : [], addEventListener() {} },
+    document: { getElementById: get, querySelectorAll: (selector) => selector === "[data-scope]" ? scopes : [], addEventListener(type, fn) { documentHandlers[type] = fn; } },
     window: { addEventListener() {} },
     localStorage: { getItem: (key) => storage.get(key) ?? null, setItem: (key, value) => storage.set(key, value) },
     setInterval(fn) { onTick = fn; }, setTimeout() {}, clearTimeout() {},
@@ -98,6 +99,8 @@ function app(snap = snapshot(), preferences = {}) {
     view: () => vm.runInContext("({ ...state.view })", context),
     bounds: () => vm.runInContext("({ ...state.graphBounds })", context),
     focus(element) { context.document.activeElement = element; },
+    activeElement: () => context.document.activeElement,
+    documentEvent: (type, event) => documentHandlers[type]?.(event),
     size: () => get("canvas").getBoundingClientRect(),
     fire: (type, extra = {}) => get("canvas").handlers[type]({
       preventDefault() {}, target: { closest: () => null }, clientX: 500, clientY: 350, deltaX: 0, deltaY: 0, ...extra,
@@ -295,6 +298,104 @@ const clickSession = (a, id, { live = false, element = "session-rows" } = {}) =>
   a.get(element).handlers.click({ target: { closest: (selector) => selector === "[data-live-view]" ? (live ? {} : null) : selector === sessionSelector ? { dataset: { id } } : null } });
 };
 const changeFilter = (a, id, value) => a.get(`${id}-filter`).handlers.change({ target: { value } });
+
+const decodeAttribute = (value) => value.replace(/&(?:amp|lt|gt|quot|#39);/g, (entity) => ({ "&amp;": "&", "&lt;": "<", "&gt;": ">", "&quot;": '"', "&#39;": "'" })[entity]);
+function relationButtons(a) {
+  return [...a.get("panel-body").innerHTML.matchAll(/<button type="button" class="relation-button" data-id="([^"]*)" data-relation="([^"]*)"/g)].map(([, id, relation]) => {
+    const button = {
+      dataset: { id: decodeAttribute(id), relation: decodeAttribute(relation) },
+      closest: (selector) => ["button[data-relation]", "#panel-body button[data-relation]"].includes(selector) ? button : null,
+      matches: (selector) => selector === "input, select, textarea, button",
+      focus(options) { button.focusOptions = options; a.focus(button); },
+    };
+    return button;
+  });
+}
+
+test("relations appear before session facts with direction, counts, dated observations and escaped labels", () => {
+  const snap = snapshot(3);
+  const at = "2026-09-03T14:05:00Z";
+  snap.nodes[1].title = 'Worker <img src=x onerror="alert(1)">';
+  snap.edges = [
+    { from: "test:0", to: "test:1", kind: "message", count: 3, at, label: 'Direct message <script>alert("message")</script>' },
+    { from: "test:2", to: "test:0", kind: "report", count: 2, at, label: 'Task result <svg onload="alert(2)">', inferred: true },
+  ];
+  const a = app(snap);
+  clickSession(a, "test:0", { element: "waiting" });
+  const html = a.get("panel-body").innerHTML;
+  assert.ok(html.indexOf("<h4>Relations") < html.indexOf('<dl class="facts">'));
+  assert.equal(relationButtons(a).length, 2);
+  assert.match(html, /Sent messages to ×3/);
+  assert.match(html, /Reports from ×2 · inferred/);
+  assert.match(html, /Direct message &lt;script&gt;alert\(&quot;message&quot;\)&lt;\/script&gt;/);
+  assert.match(html, /Task result &lt;svg onload=&quot;alert\(2\)&quot;&gt;/);
+  assert.match(html, /Worker &lt;img src=x onerror=&quot;alert\(1\)&quot;&gt;/);
+  assert.doesNotMatch(html, /<(?:script|svg|img)\b/);
+  const dateLabel = new Date(at).toLocaleString([], { dateStyle: "short", timeStyle: "short" });
+  assert.ok(html.includes(`<time class="note" datetime="${at}">${dateLabel}</time>`), "an older observation retains its calendar date, not just the clock time");
+  snap.edges[0].at = "invalid";
+  delete snap.edges[0].count;
+  a.send(snap);
+  assert.match(a.get("panel-body").innerHTML, /Sent messages to ×1/);
+  assert.match(a.get("panel-body").innerHTML, /Time not recorded/);
+  assert.doesNotMatch(a.get("panel-body").innerHTML, /Invalid Date/);
+});
+
+test("native relation buttons retain Enter and Space activation and reveal folded targets in Graph and List", async () => {
+  for (const display of ["graph", "list"]) {
+    for (const key of ["Enter", " "]) {
+      const snap = foldSnapshot();
+      snap.edges.push({ from: "leaf", to: "active", kind: "report", count: 1, label: "Task result" });
+      const a = app(snap);
+      a.get("collapse-finished").onclick();
+      if (display === "list") a.get("view-list").onclick();
+      clickSession(a, "active", { element: display === "list" ? "session-rows" : "viewport" });
+      const button = relationButtons(a).find((relation) => relation.dataset.id === "leaf");
+      assert.ok(button, "the relation has a native button with its target id");
+      let prevented = false;
+      a.documentEvent("keydown", { target: button, key, preventDefault() { prevented = true; } });
+      assert.equal(prevented, false, "global shortcuts must allow the native button's default keyboard click");
+      // A native button emits click for Enter/Space; run the production delegated click handler.
+      await a.get("panel").handlers.click({ target: button, detail: 0 });
+      assert.equal(a.state().selected, "leaf");
+      assert.equal(a.selections.at(-1)[0], "leaf");
+      if (display === "list") a.get("view-graph").onclick();
+      assert.ok(a.state().visibleIds.includes("leaf"), "following a relation reveals each folded ancestor");
+      assert.deepEqual(a.folds(), []);
+      assertBounded(a);
+    }
+  }
+});
+
+test("relation focus follows the same endpoint and kind across metadata refresh without moving scroll", () => {
+  const snap = snapshot(3);
+  snap.edges = [
+    { from: "test:0", to: "test:1", kind: "message", count: 1, at: "2026-10-18T10:00:00Z" },
+    { from: "test:0", to: "test:2", kind: "report", at: "2026-10-18T11:00:00Z" },
+  ];
+  const a = app(snap);
+  clickSession(a, "test:0", { element: "waiting" });
+  a.get("panel-body").querySelectorAll = (selector) => selector === "button[data-relation]" ? relationButtons(a) : [];
+  const before = relationButtons(a).find((button) => button.dataset.id === "test:1");
+  a.focus(before);
+  snap.edges[0] = { ...snap.edges[0], count: 4, at: "2026-10-18T12:00:00Z", label: "Direct message" };
+  a.send(snap);
+  const after = a.activeElement();
+  assert.notEqual(after, before, "refresh creates a new button");
+  assert.equal(after.dataset.relation, before.dataset.relation, "focus is keyed by relation identity, not row order, count or timestamp");
+  assert.equal(after.focusOptions.preventScroll, true);
+  snap.edges = snap.edges.filter((edge) => edge.to !== "test:1");
+  a.send(snap);
+  assert.equal(a.activeElement(), after, "a removed relation must not transfer focus to another target");
+  snap.edges.push({ from: "test:0", to: "test:1", kind: "message", count: 4 });
+  a.focus(null);
+  a.send(snap);
+  a.focus(before);
+  clickSession(a, "test:1", { element: "viewport" });
+  assert.match(a.get("panel-body").innerHTML, /Messages from ×4/);
+  assert.equal(relationButtons(a).length, 1, "the reverse relation exists in the newly selected session");
+  assert.equal(a.activeElement(), before, "changing the selected session must not focus its reverse relation");
+});
 
 test("switching graph and list preserves the selected session and persists the chosen display", () => {
   const snap = snapshot(3);

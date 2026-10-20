@@ -49,6 +49,7 @@ on the same port; an installed background service already owns the default port.
 | --- | --- |
 | `bin/` | Command-line entry points and browser runner |
 | `src/adapters/` | Runtime-specific metadata readers; see the [adapter contract](ADAPTERS.md) |
+| `src/adapters/session-relations.mjs`, `src/session-branch.mjs` | OMP identity/communication evidence and shared active-branch selection |
 | `src/collector.mjs`, `src/procs.mjs` | Independent source refreshes, process ownership and freshness |
 | `src/attention.mjs` | Supported input, completion and failure events |
 | `src/server.mjs`, `src/details.mjs`, `src/session-content.mjs` | Local HTTP/SSE server and bounded inspector content |
@@ -80,6 +81,28 @@ command or response activity. Relevant suites include `content.test.mjs`,
 `native-download.test.mjs`, `inspector.test.mjs`, `live-view.test.mjs` and
 `browser-view.test.mjs`. Record actual execution and UI evidence in the
 [v0.11 verification notes](VERIFICATION.md#v011-files-and-readable-live--2026-10-20).
+
+## Relations and branch changes
+
+The [relation contract](RELATIONS.md) distinguishes persisted session IDs from
+runtime worker aliases, identifies supported structured records and documents
+the read limits. Keep transcript and result-file bodies out of relation metadata.
+Use exact known endpoints; do not make missing evidence look complete through
+name matching or placeholder communication nodes.
+
+Relation changes need synthetic coverage for duplicate aliases, separate roots,
+managed receipt matching, failed/unfinished jobs, observed counts and time
+windows. Branch changes need coverage across attention, file associations,
+Chat/Results/Live and archive pagination. Include source replacement with the
+same size and modification time, and late OMP usage rows with a selected leaf
+outside the retained tail. Local revisions must remain opaque to HTTP clients.
+
+Relevant suites are `session-relations.test.mjs`, `session-branch.test.mjs`,
+`util.test.mjs`, `details.test.mjs`, `inspector.test.mjs` and
+`navigation.test.mjs`. Check relation keyboard navigation/focus and the separate
+OMP/Pi/fleet archive disclosure in a synthetic browser session. Record execution
+results and remaining validation in the
+[v0.12 verification notes](VERIFICATION.md#v012-agent-relations-and-branch-consistency--2026-10-20).
 
 ## Repository hygiene
 

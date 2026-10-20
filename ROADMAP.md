@@ -1,7 +1,7 @@
 # Roadmap
 
 ## Now
-- v0.11.0 adds Files in Results and a clearer Live view: current status, recorded work and readable background notices are separate. Validate file associations and everyday Live coverage across supported runtimes; agentsview remains the background archive.
+- v0.12.0 adds supported OMP communication and managed-worker relations, clearer navigation between agents and consistent current-branch content. Validate these exchanges in everyday work alongside Files and automatic Live; agentsview remains the separate background archive for OMP/Pi/fleet.
 
 ## Next
 - **File coverage:** validate supported links/writes in everyday work. External output folders need an explicit access contract; Pi/OMP/fleet archive artifacts need verified branch identity before inclusion. Embedded document rendering remains a later extension. [Current behavior and limits](docs/ARTIFACTS.md).
@@ -10,8 +10,8 @@
 - **Sustained freshness:** continue daily freshness checks using process-stage timings for outliers. The latest 60 health samples were current; finite samples do not establish an uptime guarantee.
 - **Browser coverage:** validate automatic discovery during normal terminal-agent work. Private-pipe-only browser tools need a runtime-specific export; iframe click coordinates and following an owner's active tab remain unimplemented. Newly discovered pages appear in the Live selector.
 - **Attention coverage:** validate supported input/approval events in everyday use; extend runtime-specific formats when evidence is available. Prose questions stay labeled as inferred; bounded tails cannot recover omitted events.
-- **OMP inter-agent messages:** `irc:incoming`, `async-result` and `live-delegation` custom messages become `message`/`report` edges.
-- **OMP L1 results:** `*.l1-result.txt` and l1_session send/receive become `report` edges.
+- **OMP relation coverage:** validate native task messages and managed L1 send/result receipts against the supported runtime. Content-only `live-delegation`, arbitrary SDK root aliases and incomplete bounded-tail identities need explicit evidence before linking. Result-file existence alone does not prove delivery. [Supported contract](docs/RELATIONS.md).
+- **Branch-aware archive:** obtain reliable OMP/Pi/fleet archive branch identity before merging older messages into the current view or including archive files. Current archive history stays separately expandable.
 - **Codex threads started from Claude:** link them when a Claude Bash call runs `codex exec`/`codex resume` and the thread id shows up in the transcript.
 - **Stale Claude registry check:** compare the registry's `procStart` with the process start time, so a reused pid is caught.
 - **OpenCode adapter:** once its 1.18 session store is located.
@@ -25,6 +25,13 @@
 - Remote machines over SSH (same adapters, remote `ps`/`lsof`).
 
 ## Done
+- 2026-10-20 v0.12 agent relations and branch consistency (`INCREMENTAL / EMPIRICAL`):
+  - structured OMP incoming messages, terminal task reports and matched managed L1 receipts resolve scoped session identities; queued messages and received results have distinct labels
+  - managed workers retain their own identity without taking the host process assignment; verified native parents determine flat-directory child hierarchy
+  - relation buttons show direction, observed count and event time, preserve keyboard focus and reveal collapsed destinations
+  - shared active-branch selection handles late OMP usage records; local revisions clear superseded inspector content, while unverified archive history remains separate
+  - file caches detect replacement with unchanged size/modification time; bounded parsing avoids reading unrelated historical transcripts
+  - [verification, independent review and limits](docs/VERIFICATION.md#v012-agent-relations-and-branch-consistency--2026-10-20)
 - 2026-10-20 v0.11 files and readable Live (`INCREMENTAL / EMPIRICAL`):
   - Files in Results previews supported raster images and escaped text/code, with explicit document downloads and useful unavailable states
   - bounded, session-bound file access revalidates workspace, source, branch, revision and file identity; open previews and reading position survive ordinary polling

@@ -3,6 +3,10 @@ import { setImmediate } from "node:timers/promises";
 import { test } from "node:test";
 import { createInspector, mergeContent } from "../ui/inspector.js";
 import { liveActivity } from "../ui/live-view.js";
+import { mkdtemp, mkdir, writeFile, appendFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { createDetailsService } from "../src/details.mjs";
 
 test("tail-only returns invalidate inherited execution state while preserving the command", () => {
   const at = new Date().toISOString();
@@ -35,17 +39,222 @@ const response = (id, text, extra = {}) => new Response(JSON.stringify({
 }));
 function root() {
   const thread = { scrollTop: 0, scrollHeight: 1000, clientHeight: 500 };
+  const archiveDisclosure = { open: false };
   const artifacts = {
     innerHTML: "", scrollTop: 0, hidden: true,
     querySelectorAll: () => [], addEventListener() {}, removeEventListener() {}, replaceWith() {},
   };
   return {
-    innerHTML: "", handler: null, thread, artifacts,
-    querySelector: (selector) => selector === ".session-artifacts" ? artifacts : thread, querySelectorAll: () => [],
+    innerHTML: "", handler: null, thread, artifacts, archiveDisclosure,
+    querySelector(selector) {
+      if (selector === ".session-artifacts") return artifacts;
+      if (selector === "[data-archive-history]") return this.innerHTML.includes("data-archive-history") ? archiveDisclosure : null;
+      return thread;
+    },
+    querySelectorAll: () => [],
     addEventListener(_, fn) { this.handler = fn; },
     click(dataset = {}, attribute = null) { this.handler({ target: { closest: () => ({ dataset, hasAttribute: (a) => a === attribute }) } }); },
   };
 }
+
+const branchMessage = (id) => ({ id, kind: "message", role: "assistant", text: id, final: true, at: "2026-10-20T12:00:00Z" });
+const branchResponse = (revision, entries, archive, extra = {}) => response("a", "unused", {
+  branchScoped: true,
+  local: { state: "available", revision, entries, activity: entries.length ? { label: "Posted a response", detail: entries.at(-1).text } : null },
+  archive: archive ?? { state: "not-indexed", entries: [], hasMore: false },
+  ...extra,
+});
+
+test("branch revisions revoke retained current content while archive history stays secondary and collapsed", async (t) => {
+  t.mock.timers.enable({ apis: ["setInterval"] });
+  const previousDocument = globalThis.document;
+  globalThis.document = { hidden: false };
+  t.after(() => { globalThis.document = previousDocument; });
+  const r = root(), updates = [];
+  let current = branchResponse("initial", [branchMessage("OLD BRANCH")], {
+    state: "available", revision: "archive", entries: [{ ...branchMessage("ARCHIVED OTHER BRANCH"), ordinal: 10 }], hasMore: true, before: 9,
+  });
+  const inspector = createInspector(r, {
+    fetcher: async () => current.clone(),
+    browserView: { select: (id, context) => updates.push({ id, context }), destroy() {} },
+  });
+  t.after(() => inspector.destroy());
+  inspector.select("a"); await setImmediate();
+  assert.match(r.innerHTML, /<summary>Archive history/);
+  assert.match(r.innerHTML, /These older messages may belong to another conversation branch/);
+  assert.equal(r.archiveDisclosure.open, false);
+  assert.ok(r.innerHTML.indexOf("ARCHIVED OTHER BRANCH") > r.innerHTML.indexOf("data-archive-history"));
+  inspector.showTab("results");
+  assert.doesNotMatch(r.innerHTML, /ARCHIVED OTHER BRANCH/);
+  inspector.showTab("live");
+  assert.deepEqual(updates.at(-1).context.entries.map((entry) => entry.text), ["OLD BRANCH"]);
+  for (const [revision, entries] of [["fork", [branchMessage("NEW BRANCH")]], ["cleared", []], ["missing-leaf", []]]) {
+    current = branchResponse(revision, entries, {
+      state: "available", revision: "archive", entries: [{ ...branchMessage("ARCHIVED OTHER BRANCH"), ordinal: 10 }], hasMore: false,
+    });
+    t.mock.timers.tick(4000); await setImmediate();
+    assert.deepEqual(updates.at(-1).context.entries.map((entry) => entry.text), entries.map((entry) => entry.text));
+    assert.doesNotMatch(r.innerHTML, /OLD BRANCH|ARCHIVED OTHER BRANCH/);
+    assert.equal(updates.at(-1).context.activity?.detail ?? null, entries.at(-1)?.text ?? null);
+  }
+  inspector.showTab("chat");
+  assert.match(r.innerHTML, /No messages observed in the current conversation/);
+  assert.match(r.innerHTML, /ARCHIVED OTHER BRANCH/);
+  assert.equal(r.archiveDisclosure.open, false);
+});
+
+test("straight branch appends retain the bounded local view, scroll and archive disclosure while failures retain last evidence", async (t) => {
+  t.mock.timers.enable({ apis: ["setInterval"] });
+  const previousDocument = globalThis.document;
+  globalThis.document = { hidden: false };
+  t.after(() => { globalThis.document = previousDocument; });
+  const r = root(), updates = [];
+  const archive = { state: "available", revision: "archive", entries: [branchMessage("OLDER ARCHIVE")], hasMore: false };
+  let current = branchResponse("same", Array.from({ length: 399 }, (_, i) => branchMessage(`LOCAL ${i}`)), archive);
+  const inspector = createInspector(r, { fetcher: async () => current.clone(), browserView: { select: (id, context) => updates.push({ id, context }), destroy() {} } });
+  t.after(() => inspector.destroy());
+  inspector.select("a"); await setImmediate();
+  r.thread.scrollTop = 100;
+  r.archiveDisclosure.open = true;
+  current = branchResponse("same", [399, 400, 401].map((i) => branchMessage(`LOCAL ${i}`)), archive);
+  t.mock.timers.tick(4000); await setImmediate();
+  assert.equal(r.thread.scrollTop, 100);
+  assert.equal(r.archiveDisclosure.open, true);
+  assert.equal(updates.at(-1).context.entries.length, 400);
+  assert.equal(updates.at(-1).context.entries[0].text, "LOCAL 2");
+  assert.equal(updates.at(-1).context.entries.at(-1).text, "LOCAL 401");
+  current = branchResponse(null, [], { state: "offline", entries: [], hasMore: false }, { local: { state: "unavailable", entries: [], activity: null } });
+  t.mock.timers.tick(4000); await setImmediate();
+  assert.equal(updates.at(-1).context.entries.length, 400);
+  assert.equal(updates.at(-1).context.activity.detail, "LOCAL 401");
+  assert.equal(updates.at(-1).context.localState, "unavailable");
+  current = new Response("offline", { status: 503 });
+  r.click({}, "data-inspector-refresh"); await setImmediate();
+  assert.equal(updates.at(-1).context.entries.length, 400);
+  assert.match(updates.at(-1).context.error, /could not be loaded/);
+  assert.match(r.innerHTML, /OLDER ARCHIVE/);
+});
+
+test("a branch change during archive pagination clears old local and archive content before accepting the returned page", async (t) => {
+  const r = root(), updates = [], urls = [];
+  const inspector = createInspector(r, {
+    fetcher: async (url) => {
+      urls.push(url);
+      return url.includes("before=") ? branchResponse("new", [], {
+        state: "available", revision: "archive", entries: [{ ...branchMessage("RETURNED OLDER PAGE"), ordinal: 1 }], hasMore: false,
+      }) : branchResponse("old", [branchMessage("OLD CURRENT BRANCH")], {
+        state: "available", revision: "archive", entries: [{ ...branchMessage("OLD RETAINED ARCHIVE"), ordinal: 20 }], hasMore: true, before: 19,
+      });
+    },
+    browserView: { select: (id, context) => updates.push({ id, context }), destroy() {} },
+  });
+  t.after(() => inspector.destroy());
+  inspector.select("a"); await setImmediate();
+  r.archiveDisclosure.open = true;
+  r.click({}, "data-load-history"); await setImmediate();
+  assert.match(urls[1], /before=19&revision=archive/);
+  assert.doesNotMatch(r.innerHTML, /OLD CURRENT BRANCH|OLD RETAINED ARCHIVE/);
+  assert.match(r.innerHTML, /RETURNED OLDER PAGE/);
+  assert.equal(r.archiveDisclosure.open, false);
+  assert.deepEqual(updates.at(-1).context.entries, []);
+  assert.equal(updates.at(-1).context.activity, null);
+  inspector.showTab("live");
+  assert.deepEqual(updates.at(-1).context.entries, []);
+});
+
+test("OMP active-leaf changes revoke already displayed Inspector and Live evidence end to end", async (t) => {
+  const home = await mkdtemp(join(tmpdir(), "agent-fleet-inspector-branch-"));
+  t.after(() => rm(home, { recursive: true, force: true }));
+  const dir = join(home, ".omp", "agent", "sessions");
+  await mkdir(dir, { recursive: true });
+  const source = join(dir, "branch.jsonl");
+  const record = (id, parentId, text) => ({ type: "message", id, parentId, timestamp: "2026-10-20T12:00:00Z", message: { role: "assistant", content: text } });
+  await writeFile(source, [record("root", null, "ROOT"), record("old", "root", "ABANDONED RESPONSE")].map((row) => JSON.stringify(row) + "\n").join(""));
+  const node = { id: "omp:fixture", agent: "omp", kind: "session", cwd: home, source };
+  const details = createDetailsService({ home, agentsviewUrl: "http://127.0.0.1:8080" });
+  const r = root(), updates = [];
+  let latest;
+  const inspector = createInspector(r, {
+    fetcher: async () => new Response(JSON.stringify(await (latest = details.get(node)))),
+    browserView: { select: (id, context) => updates.push({ id, context }), destroy() {} },
+  });
+  t.after(() => inspector.destroy());
+  const settle = async () => { await latest; await setImmediate(); };
+  inspector.select(node.id); inspector.showTab("live"); await settle();
+  assert.ok(updates.at(-1).context.entries.some((entry) => entry.text === "ABANDONED RESPONSE"));
+  for (const [id, activeLeafId] of [["clear", null], ["missing", "outside-tail"], ["restore", "root"]]) {
+    await appendFile(source, JSON.stringify({ type: "model_usage", id, parentId: "old", activeLeafId }) + "\n");
+    r.click({}, "data-inspector-refresh"); await settle();
+    const entries = updates.at(-1).context.entries;
+    assert.deepEqual(entries.map((entry) => entry.text), activeLeafId === "root" ? ["ROOT"] : []);
+    assert.doesNotMatch(r.innerHTML, /ABANDONED RESPONSE/);
+  }
+});
+
+test("late branch pagination cannot clear or repopulate a newly selected session", async (t) => {
+  const r = root(), pending = [], updates = [];
+  const inspector = createInspector(r, {
+    fetcher: (url, options) => new Promise((resolve) => pending.push({ url, resolve, signal: options.signal })),
+    browserView: { select: (id, context) => updates.push({ id, context }), destroy() {} },
+  });
+  t.after(() => inspector.destroy());
+  inspector.select("a");
+  pending[0].resolve(branchResponse("old", [branchMessage("OLD LOCAL")], {
+    state: "available", revision: "archive", entries: [], hasMore: true, before: 5,
+  }));
+  await setImmediate();
+  r.click({}, "data-load-history");
+  inspector.select("b"); inspector.showTab("live");
+  assert.equal(pending[1].signal.aborted, true);
+  pending[1].resolve(branchResponse("changed", [], { state: "available", revision: "archive", entries: [branchMessage("OLD ARCHIVE")], hasMore: false }));
+  pending[2].resolve(response("b", "NEW SESSION"));
+  await setImmediate();
+  assert.equal(updates.at(-1).id, "b");
+  assert.deepEqual(updates.at(-1).context.entries.map((entry) => entry.text), ["NEW SESSION"]);
+  assert.doesNotMatch(r.innerHTML, /OLD LOCAL|OLD ARCHIVE/);
+});
+
+test("archive controls retain keyboard focus across refreshes and fall back to the summary when pagination ends", async (t) => {
+  const r = root();
+  let markup = "", activeElement = null, summary = null, load = null, hasMore = true, poll = 0;
+  r.ownerDocument = { get activeElement() { return activeElement; } };
+  r.contains = (element) => element === r.archiveDisclosure;
+  const control = (selector, disabled = false) => ({
+    disabled,
+    closest: (target) => target === "[data-archive-history]" ? r.archiveDisclosure : null,
+    matches: (target) => target === selector,
+    focus(options) { assert.equal(options.preventScroll, true); activeElement = this; },
+  });
+  Object.defineProperty(r, "innerHTML", {
+    get: () => markup,
+    set(value) {
+      markup = value; activeElement = null;
+      summary = control("summary");
+      load = value.includes("data-load-history") ? control("[data-load-history]", /class="load-history" data-load-history disabled/.test(value)) : null;
+    },
+  });
+  r.archiveDisclosure.querySelector = (selector) => selector === "summary" ? summary : selector === "[data-load-history]" ? load : null;
+  const inspector = createInspector(r, { fetcher: async () => branchResponse("same", [branchMessage(`LOCAL ${poll++}`)], {
+    state: "available", revision: "archive", entries: [branchMessage("ARCHIVED")], hasMore, before: 5,
+  }) });
+  t.after(() => inspector.destroy());
+  inspector.select("a"); await setImmediate();
+  r.archiveDisclosure.open = true;
+  activeElement = summary;
+  const previousSummary = summary;
+  r.click({}, "data-inspector-refresh"); await setImmediate();
+  assert.notEqual(summary, previousSummary);
+  assert.equal(activeElement, summary);
+  activeElement = load;
+  const previousLoad = load;
+  r.click({}, "data-inspector-refresh"); await setImmediate();
+  assert.notEqual(load, previousLoad);
+  assert.equal(activeElement, load);
+  hasMore = false;
+  r.click({}, "data-load-history"); await setImmediate();
+  assert.equal(load, null);
+  assert.equal(activeElement, summary);
+});
 
 test("graph shortcut opens Live and later content refreshes preserve the selected viewer", async (t) => {
   const r = root(); const selected = [];

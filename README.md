@@ -11,9 +11,10 @@ Agent Fleet reads sessions from **Claude Code, Codex, OhMyPi, Pi and pi-agent-fl
 ## What it does
 
 - **Graph and compact list:** explore parent/child relationships, filter by project, agent or status, and collapse completed branches while keeping active work visible.
+- **Agent collaboration:** follow supported OMP messages and reports with direction, observed counts and times. Open the linked agent directly, including when its branch is collapsed.
 - **Attention and status:** separate input requests, failures and recently completed replies. Inferred questions are labeled.
 - **Source freshness:** show observation ages and source failures. Sources update independently; unavailable sources retain a labeled last-known view for up to two minutes.
-- **Session inspector:** read recent chat and tool results. An optional [agentsview](https://github.com/kenn-io/agentsview) service supplies older history.
+- **Session inspector:** read recent chat and tool results from the active conversation branch. An optional [agentsview](https://github.com/kenn-io/agentsview) service supplies older history; OMP/Pi/fleet archives remain separately expandable because their branch identity is unverified.
 - **Automatic Live view:** prioritize a supported browser image, then observed terminal commands/output, then the latest agent activity. Show current session status separately from recorded work; readable background notices keep internal runtime markup out of the way.
 - **Files in Results:** preview linked images and text/code, or download supported documents. Files stay associated with their session; missing or restricted files have explicit states.
 - **Native Mac window:** install a standalone dashboard window and login startup, backed by the same local service.
@@ -87,6 +88,8 @@ File access requires an explicit supported link or successful file-writing actio
 
 Status recognition follows each runtime's recorded events. Pi/OMP activity can still rely on file recency, and OpenCode currently has process metadata only. A completed reply can leave its session idle; it does not necessarily mean the session ended. Source freshness is shown separately from session status.
 
+OMP communication links require structured events and unambiguous session identities. A queued message does not confirm delivery, and a received report does not guarantee success. Counts cover the retained observation window. See [supported relations and branch handling](docs/RELATIONS.md).
+
 Large graphs use compact status cards in the overview and render detailed cards near the visible area when zoomed in. Select an overview card to zoom to it; List, filters and Collapse finished remain useful for navigating large projects. A synthetic 3,000-level chain is verified; this is not a guarantee for every graph or device. See the [measured limits](docs/VERIFICATION.md#v010-automatic-live-and-graph-rendering--2026-10-20).
 
 ## Development and documentation
@@ -100,10 +103,11 @@ Tests use Node's built-in runner and synthetic fixtures. Browser integration tes
 - [Usage guide](docs/USAGE.md): views, filters, status meanings, freshness and navigation.
 - [Browser views](docs/BROWSER.md): discovery, terminal commands and supported integrations.
 - [File previews](docs/ARTIFACTS.md): associations, supported formats, access and limits.
+- [Agent relations](docs/RELATIONS.md): supported messages/reports, session identities and active branches.
 - [Mac app](docs/DESKTOP.md): installation, startup and removal.
 - [Development guide](docs/DEVELOPMENT.md): repository structure and checks.
 - [Adapter development](docs/ADAPTERS.md): add a session source.
 - [Verification notes](docs/VERIFICATION.md): measured behavior, checks and remaining limits.
 - [Roadmap](ROADMAP.md): completed work and next steps.
 
-**Current version: v0.11.0.** This is an evolving local tool, classified as **INCREMENTAL / EMPIRICAL** engineering. Compatibility and performance are backed by the documented checks, not a guarantee for every agent version or host workload.
+**Current version: v0.12.0.** This is an evolving local tool, classified as **INCREMENTAL / EMPIRICAL** engineering. Compatibility and performance are backed by the documented checks, not a guarantee for every agent version or host workload.

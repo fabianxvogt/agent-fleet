@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, rm, symlink, writeFile, stat, rename, utimes } from "node:fs/promises";
+import { mkdtemp, mkdir, rm, symlink, writeFile, appendFile, stat, rename, utimes } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { request } from "node:http";
@@ -47,6 +47,117 @@ test("local content survives archive failure and updates when the log grows", as
   await writeFile(f.source, JSON.stringify({ type: "event_msg", timestamp: T, payload: { type: "task_complete" } }) + "\n");
   const next = await service.get(f.node);
   assert.equal(next.local.activity.label, "Turn finished");
+});
+
+const branchRecord = (id, parentId, text = id) => ({ type: "message", id, parentId, timestamp: T, message: { role: "assistant", content: text, stopReason: "stop" } });
+const recordsText = (records) => records.map((record) => JSON.stringify(record) + "\n").join("");
+
+test("branch-scoped local revisions preserve appends and revoke forks, clears, unknown leaves and source replacements", async (t) => {
+  const f = await fixture(t);
+  const root = join(f.home, ".omp", "agent", "sessions");
+  await mkdir(root, { recursive: true });
+  const source = join(root, "branch.jsonl");
+  const records = [branchRecord("root", null), branchRecord("a", "root")];
+  await writeFile(source, recordsText(records));
+  const node = { ...f.node, id: "omp:fixture", agent: "omp", source, agentsviewId: null };
+  const service = createDetailsService(f.config);
+  const first = await service.get(node);
+  assert.equal(first.branchScoped, true);
+  assert.match(first.local.revision, /^[\da-f-]{36}$/);
+  assert.equal(first.local.branch, undefined);
+  assert.equal(first.local.sourceIdentity, undefined);
+  assert.equal((await service.get(node)).local.revision, first.local.revision);
+
+  records.push(branchRecord("b", "a"));
+  await appendFile(source, recordsText(records.slice(-1)));
+  const appended = await service.get(node);
+  assert.equal(appended.local.revision, first.local.revision);
+  records.push({ type: "model_usage", id: "usage-same", parentId: "a", activeLeafId: "b" });
+  await appendFile(source, recordsText(records.slice(-1)));
+  assert.equal((await service.get(node)).local.revision, first.local.revision, "late usage on the same active head preserves retained messages");
+
+  let previousRevision = first.local.revision;
+  for (const [record, expected] of [
+    [branchRecord("fork", "root"), ["root", "fork"]],
+    [{ type: "model_usage", id: "usage-clear", parentId: "fork", activeLeafId: null }, []],
+    [{ type: "model_usage", id: "usage-outside", parentId: "fork", activeLeafId: "outside-tail" }, []],
+    [{ type: "model_usage", id: "usage-return", parentId: "fork", activeLeafId: "b" }, ["root", "a", "b"]],
+  ]) {
+    records.push(record);
+    await appendFile(source, recordsText([record]));
+    const changed = await service.get(node);
+    assert.notEqual(changed.local.revision, previousRevision);
+    assert.deepEqual(changed.local.entries.map((entry) => entry.text), expected);
+    previousRevision = changed.local.revision;
+  }
+  const replacement = source + ".replacement";
+  const stamp = await stat(source);
+  await writeFile(replacement, recordsText(records));
+  await utimes(replacement, stamp.atime, stamp.mtime);
+  await rename(replacement, source);
+  const replaced = await service.get(node);
+  assert.notEqual(replaced.local.revision, previousRevision, "same-size, same-mtime replacement has a new file identity");
+  await writeFile(source, recordsText([branchRecord("tail", "outside-tail")]));
+  const gap = await service.get(node);
+  assert.notEqual(gap.local.revision, replaced.local.revision);
+  assert.deepEqual(gap.local.entries.map((entry) => entry.text), ["tail"]);
+  await writeFile(source, recordsText([branchRecord("new-root", null, "A rewritten longer ancestor"), branchRecord("tail", "new-root", "Updated tail")]));
+  const rewired = await service.get(node);
+  assert.notEqual(rewired.local.revision, gap.local.revision, "a retained head cannot prove continuity after its known ancestry changes");
+  await writeFile(source, recordsText([branchRecord("tail", null, "Updated tail"), branchRecord("new", "tail", "A longer rewritten record ".repeat(30))]));
+  const detached = await service.get(node);
+  assert.notEqual(detached.local.revision, rewired.local.revision, "a parent changed to null is a rewrite, not an ancestor falling outside the bounded tail");
+  await writeFile(source, recordsText([branchRecord("tail", null, "Updated tail"), branchRecord("new", "tail", "Changed same-ID record ".repeat(60))]));
+  const mutated = await service.get(node);
+  assert.notEqual(mutated.local.revision, detached.local.revision, "same-ID record mutations revoke retained content too");
+  await writeFile(source, recordsText([branchRecord("tail", null), branchRecord("head", "tail")]));
+  const complete = await service.get(node);
+  await writeFile(source, recordsText([branchRecord("head", "tail"), branchRecord("after", "head", "Growing rewrite with a missing ancestor ".repeat(30))]));
+  const removed = await service.get(node);
+  assert.notEqual(removed.local.revision, complete.local.revision, "missing ancestors in a complete-file read cannot be attributed to tail truncation");
+});
+
+test("branch-scoped older-page requests refresh local revision while retaining separate archive access", async (t) => {
+  const f = await fixture(t);
+  for (const agent of ["omp", "pi", "fleet"]) {
+    const cwd = join(f.home, `project-${agent}`);
+    const root = agent === "fleet" ? join(cwd, ".fleet") : join(f.home, `.${agent}`, "agent", "sessions");
+    await mkdir(root, { recursive: true });
+    const source = join(root, "branch.jsonl");
+    await writeFile(source, recordsText([branchRecord("root", null), branchRecord("old", "root")]));
+    const node = { ...f.node, id: `${agent}:fixture`, agent, kind: agent === "fleet" ? "worker" : "session", cwd, source, agentsviewId: `${agent}:fixture` };
+    const service = createDetailsService(f.config, { fetcher: async (url) => url.pathname.endsWith("/messages")
+      ? json({ messages: [{ ordinal: 2, role: "assistant", timestamp: T, content: "Unverified archived branch" }], transcript_revision: "archive-rev" })
+      : json({ id: node.agentsviewId, cwd }) });
+    const initial = await service.get(node);
+    await appendFile(source, recordsText([branchRecord("new", "root")]));
+    const older = await service.get(node, { before: 3, revision: "archive-rev" });
+    assert.equal(older.branchScoped, true);
+    assert.equal(older.local.state, "available");
+    assert.notEqual(older.local.revision, initial.local.revision);
+    assert.deepEqual(older.local.entries.map((entry) => entry.text), ["root", "new"]);
+    assert.equal(older.archive.entries[0].text, "Unverified archived branch");
+  }
+  const ordinary = await createDetailsService(f.config, { fetcher: async () => json({}, 404) }).get(f.node, { before: 3 });
+  assert.equal(ordinary.branchScoped, false);
+  assert.equal(ordinary.local, null, "ordinary archive pagination keeps its existing read behavior");
+});
+
+test("verified branch appends preserve revision when older ancestors roll outside the bounded tail", async (t) => {
+  const f = await fixture(t);
+  const root = join(f.home, ".omp", "agent", "sessions");
+  await mkdir(root, { recursive: true });
+  const source = join(root, "large.jsonl");
+  const record = (i) => branchRecord(`message-${i}`, i ? `message-${i - 1}` : null, `Message ${i}: ` + "x".repeat(7000));
+  await writeFile(source, recordsText(Array.from({ length: 180 }, (_, i) => record(i))));
+  const node = { ...f.node, id: "omp:large", agent: "omp", source, agentsviewId: null };
+  const details = createDetailsService(f.config);
+  const before = await details.get(node);
+  assert.equal(before.local.truncated, true);
+  await appendFile(source, recordsText(Array.from({ length: 10 }, (_, i) => record(i + 180))));
+  const after = await details.get(node);
+  assert.equal(after.local.revision, before.local.revision);
+  assert.match(after.local.entries.at(-1).text, /^Message 189:/);
 });
 
 test("unverified identity, redirected archives and non-loopback URLs cannot supply content", async (t) => {
