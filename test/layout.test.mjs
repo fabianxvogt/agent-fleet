@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { collapseCompleted, layout, projectOptions, selectVisible, selectAttention, treeParents } from "../ui/layout.js";
+import { CARD_W, GAP_X, collapseCompleted, layout, projectOptions, selectVisible, selectAttention, treeParents } from "../ui/layout.js";
 
 const NOW = Date.parse("2026-10-16T12:00:00Z");
 const n = (id, status, extra = {}) => ({ id, agent: "claude", kind: "session", status, project: "p", lastActivityAt: new Date(NOW - 1000).toISOString(), meta: {}, ...extra });
@@ -222,6 +222,83 @@ test("cycle breaking only cuts nodes on the cycle", () => {
   assert.equal(parents.get("tail"), "a");
 });
 
+const chain = (count, status = "done") => ({
+  nodes: Array.from({ length: count }, (_, i) => n(`chain:${i}`, status, { lastActivityAt: new Date(NOW - 3_600_000).toISOString() })),
+  edges: Array.from({ length: count - 1 }, (_, i) => e(`chain:${i}`, `chain:${i + 1}`)),
+});
+
+test("Live restores the full ancestry of deeply nested active work", () => {
+  const snapshot = chain(51);
+  snapshot.nodes.at(-1).status = "working";
+  const visible = selectVisible(snapshot, { now: NOW });
+  assert.deepEqual(visible.nodes, snapshot.nodes);
+  assert.deepEqual(visible.edges, snapshot.edges);
+});
+
+test("deep trees preserve every position, depth and aggregate without overflowing the stack", () => {
+  const snapshot = chain(3000, "working");
+  const result = layout(snapshot.nodes, snapshot.edges);
+  assert.equal(result.pos.size, snapshot.nodes.length);
+  assert.equal(result.lanes[0].size, snapshot.nodes.length);
+  assert.equal(result.lanes[0].working, snapshot.nodes.length);
+  for (let i = 1; i < snapshot.nodes.length; i++) {
+    const previous = result.pos.get(`chain:${i - 1}`);
+    const current = result.pos.get(`chain:${i}`);
+    assert.equal(current.x - previous.x, CARD_W + GAP_X);
+    assert.equal(current.y, previous.y);
+  }
+});
+
+test("cycle repair cuts the earliest parent entry on the cycle even when a tail visits another member first", () => {
+  const nodes = ["tail", "a", "b", "c"].map((id) => n(id, "done"));
+  const edges = [e("a", "tail"), e("c", "b"), e("a", "c"), e("b", "a")];
+  assert.deepEqual([...treeParents(nodes, edges)], [["tail", "a"], ["c", "a"], ["a", "b"]]);
+});
+
+test("parent discovery visits a deep chain a bounded number of times", () => {
+  const snapshot = chain(3000);
+  // Count synchronous work instead of asserting machine-dependent time limits.
+  const get = Map.prototype.get;
+  let reads = 0;
+  try {
+    Map.prototype.get = function (key) { reads++; return get.call(this, key); };
+    assert.equal(treeParents(snapshot.nodes, snapshot.edges).size, snapshot.nodes.length - 1);
+  } finally {
+    Map.prototype.get = get;
+  }
+  assert.ok(reads < snapshot.nodes.length * 20, `${reads} map reads for ${snapshot.nodes.length} sessions`);
+});
+
+test("nested folds do not copy every ancestor path while constructing the projection", () => {
+  const snapshot = chain(3000);
+  const collapsed = new Set(snapshot.nodes.map((node) => node.id));
+  const iterate = Array.prototype[Symbol.iterator];
+  // Copying all ancestor arrays visits O(n²) entries even when only one card is shown.
+  let visits = 0;
+  let folded;
+  try {
+    Array.prototype[Symbol.iterator] = function* () {
+      for (const value of iterate.call(this)) { visits++; yield value; }
+    };
+    folded = collapseCompleted(snapshot, snapshot, collapsed);
+  } finally {
+    Array.prototype[Symbol.iterator] = iterate;
+  }
+  assert.deepEqual(folded.nodes.map((node) => node.id), ["chain:0"]);
+  assert.ok(visits < snapshot.nodes.length * 100, `${visits} array entries copied or visited for ${snapshot.nodes.length} sessions`);
+  assert.equal(folded.hiddenIds.size, snapshot.nodes.length - 1);
+  const expectedPath = snapshot.nodes.slice(0, -1).map((node) => node.id);
+  const path = folded.revealPath(snapshot.nodes.at(-1).id);
+  assert.deepEqual(path, expectedPath);
+  path.length = 0;
+  assert.deepEqual(folded.revealPath(snapshot.nodes.at(-1).id), expectedPath, "returned paths do not mutate shared fold state");
+  assert.deepEqual(folded.revealPath("chain:0"), []);
+  assert.deepEqual(folded.revealPath("missing"), []);
+  for (const id of expectedPath) collapsed.delete(id);
+  const reopened = collapseCompleted(snapshot, snapshot, collapsed);
+  assert.equal(reopened.nodes.length, snapshot.nodes.length);
+});
+
 test("completed folds hide only whole finished branches and keep their parent", () => {
   const nodes = [
     n("root", "working"), n("done", "done"),
@@ -236,7 +313,7 @@ test("completed folds hide only whole finished branches and keep their parent", 
   const folded = collapseCompleted(snapshot, snapshot, new Set(["root"]));
   assert.deepEqual(folded.nodes.map((node) => node.id), ["root", "idle", "working", "waiting", "failed", "stale", "queued"]);
   assert.deepEqual(folded.controls.get("root"), { eligibleCount: 3, hiddenCount: 3 });
-  assert.deepEqual([...folded.hiddenBy.keys()].sort(), ["answer", "done", "grandchild"]);
+  assert.deepEqual([...folded.hiddenIds].sort(), ["answer", "done", "grandchild"]);
   assert.ok(folded.edges.every((edge) => edge.from === "root" && !["done", "answer", "grandchild"].includes(edge.to)));
 });
 
@@ -255,7 +332,7 @@ test("freshness, questions, LIVE access and placeholder nodes prevent completed 
   const folded = collapseCompleted(snapshot, snapshot, new Set(nodes.map((node) => node.id)));
   assert.deepEqual(folded.nodes, nodes);
   assert.equal(folded.controls.size, 0);
-  assert.equal(folded.hiddenBy.size, 0);
+  assert.equal(folded.hiddenIds.size, 0);
 });
 
 test("filtered-out unfinished descendants still prevent their full branch from collapsing", () => {
@@ -298,13 +375,13 @@ test("nested folds count each hidden node once and record every ancestor needed 
     ["a", { eligibleCount: 2, hiddenCount: 0 }],
     ["b", { eligibleCount: 1, hiddenCount: 0 }],
   ]);
-  assert.equal([...folded.controls.values()].reduce((sum, control) => sum + control.hiddenCount, 0), folded.hiddenBy.size);
-  assert.deepEqual(folded.hiddenBy.get("a"), ["root"]);
-  assert.deepEqual(folded.hiddenBy.get("c"), ["root", "a", "b"]);
-  for (const id of folded.hiddenBy.get("c")) collapsed.delete(id);
+  assert.equal([...folded.controls.values()].reduce((sum, control) => sum + control.hiddenCount, 0), folded.hiddenIds.size);
+  assert.deepEqual(folded.revealPath("a"), ["root"]);
+  assert.deepEqual(folded.revealPath("c"), ["root", "a", "b"]);
+  for (const id of folded.revealPath("c")) collapsed.delete(id);
   const revealed = collapseCompleted(snapshot, snapshot, collapsed);
   assert.deepEqual(revealed.nodes, snapshot.nodes);
-  assert.equal(revealed.hiddenBy.size, 0);
+  assert.equal(revealed.hiddenIds.size, 0);
   const partiallyExpanded = collapseCompleted(snapshot, snapshot, new Set(["a", "b"]));
   assert.deepEqual(partiallyExpanded.nodes.map((node) => node.id), ["root", "a"]);
   assert.deepEqual(partiallyExpanded.controls.get("a"), { eligibleCount: 2, hiddenCount: 2 });
@@ -314,7 +391,7 @@ test("fold preferences do not conceal resumed, failed, waiting, stale or newly L
   const completed = n("child", "idle", { attention: { kind: "completed" } });
   const original = { nodes: [n("root", "working"), n("branch", "done"), completed], edges: [e("root", "branch"), e("branch", "child")] };
   const collapsed = new Set(["root", "branch"]);
-  assert.equal(collapseCompleted(original, original, collapsed).hiddenBy.size, 2);
+  assert.equal(collapseCompleted(original, original, collapsed).hiddenIds.size, 2);
   const transitions = [
     { status: "working" }, { status: "failed" }, { status: "waiting", attention: { kind: "question" } },
     { status: "queued" }, { status: "stale" }, { status: "idle", attention: null },
@@ -324,7 +401,7 @@ test("fold preferences do not conceal resumed, failed, waiting, stale or newly L
     const snapshot = { ...original, nodes: [...original.nodes.slice(0, 2), { ...completed, ...change }] };
     const folded = collapseCompleted(snapshot, snapshot, collapsed);
     assert.deepEqual(folded.nodes, snapshot.nodes);
-    assert.equal(folded.hiddenBy.size, 0);
+    assert.equal(folded.hiddenIds.size, 0);
   }
 });
 
@@ -337,7 +414,7 @@ test("fold counts include only matching visible descendants and leave unrelated 
   const folded = collapseCompleted(snapshot, visible, new Set(["root", "other-root", "missing"]));
   assert.deepEqual(folded.nodes.map((node) => node.id), ["root", "other-root"]);
   assert.deepEqual(folded.controls.get("root"), { eligibleCount: 2, hiddenCount: 2 });
-  assert.equal(folded.hiddenBy.size, 2);
+  assert.equal(folded.hiddenIds.size, 2);
   assert.equal(folded.controls.has("other-root"), false);
 });
 
@@ -351,9 +428,11 @@ test("fold projection tolerates cycles and dangling edges without mutating its i
   const visible = Object.freeze({ nodes: Object.freeze(nodes), edges: Object.freeze(edges) });
   const folded = collapseCompleted(snapshot, visible, collapsed);
   assert.equal(folded.nodes.length, 1);
-  assert.equal(folded.hiddenBy.size, 2);
+  assert.equal(folded.hiddenIds.size, 2);
   assert.deepEqual(snapshot, { nodes, edges });
   assert.deepEqual([...collapsed], ["a", "b", "tail"]);
   assert.ok(folded.edges.every((edge) => folded.nodes.some((node) => node.id === edge.from) && folded.nodes.some((node) => node.id === edge.to)));
-  assert.deepEqual(collapseCompleted({ nodes: [], edges: [] }, { nodes: [], edges: [] }), { nodes: [], edges: [], controls: new Map(), hiddenBy: new Map() });
+  const empty = collapseCompleted({ nodes: [], edges: [] }, { nodes: [], edges: [] });
+  assert.deepEqual({ ...empty, revealPath: undefined }, { nodes: [], edges: [], controls: new Map(), hiddenIds: new Set(), revealPath: undefined });
+  assert.deepEqual(empty.revealPath("missing"), []);
 });

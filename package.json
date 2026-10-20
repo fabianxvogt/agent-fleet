@@ -1,6 +1,6 @@
 {
   "name": "agent-fleet",
-  "version": "0.9.0",
+  "version": "0.9.1",
   "description": "Local live dashboard of every coding-agent session on this machine and how they relate.",
   "repository": { "type": "git", "url": "https://github.com/fabianxvogt/agent-fleet.git" },
   "homepage": "https://github.com/fabianxvogt/agent-fleet#readme",
@@ -12,6 +12,7 @@
   "scripts": {
     "start": "node bin/agent-fleet.mjs serve",
     "snapshot": "node bin/agent-fleet.mjs snapshot",
-    "test": "node --test --test-concurrency=1 test/*.test.mjs"
+    "test": "node --test --test-concurrency=1 test/*.test.mjs",
+    "benchmark:layout": "node scripts/benchmark-layout.mjs"
   }
 }

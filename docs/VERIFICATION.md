@@ -1,6 +1,31 @@
 # Verification and limitations
 
-Historical checks are grouped by feature and date. The latest release checks and source-freshness evidence are for v0.9; older test counts and observations describe earlier revisions. See the [documentation index](README.md) for setup and usage.
+Historical checks are grouped by feature and date. The latest release checks are for v0.9.1; older test counts and observations describe earlier revisions. See the [documentation index](README.md) for setup and usage.
+
+## v0.9.1 deep-tree robustness — 2026-10-20
+
+Classification: **INCREMENTAL / EMPIRICAL**. Before the change, a synthetic 3,000-level session chain caused a JavaScript call-stack error in layout, and a working leaf below 50 old completed ancestors retained only 21 of the expected 51 nodes. Cycle detection repeatedly traversed the same ancestor chains, and folded paths copied every ancestor ID into each descendant's array.
+
+Parent-cycle detection now visits each chain once while preserving the original cycle-breaking choice. Ancestor restoration follows the resulting acyclic tree without an arbitrary depth cap. Iterative subtree statistics and placement preserve geometry and ordering. Fold paths share storage and materialize only when a selected node must be revealed. List rendering skips graph-fold projection without clearing fold preferences.
+
+**184 tests passed, zero failed or skipped**, with `npm test`, including isolated Chromium integrations. New [layout regressions](../test/layout.test.mjs) cover complete ancestry, 3,000-level layout, bounded traversal and independent nested reveal paths. [UI-handler regressions](../test/navigation.test.mjs) cover List filtering/refresh and selected-child reveal on return to Graph. Independent review found no actionable issues and compared 500 seeded synthetic graphs against v0.9, including cycles, competing parents, filters, sticky ordering and nested folds; outputs matched.
+
+Reproduce computation measurements with `npm run benchmark:layout -- --baseline bbe95c1`. The [benchmark](../scripts/benchmark-layout.mjs) alternates three runs per version using synthetic data. Median milliseconds on this Mac:
+
+| Fixture | Selection before → after | Fold projection before → after | Full layout before → after |
+| --- | --- | --- | --- |
+| Balanced, 1,000 nodes | 2.24 → 2.37 | 5.29 → 7.60 | 3.46 → 3.93 |
+| Balanced, 3,000 nodes | 5.01 → 5.74 | 12.60 → 11.94 | 8.39 → 10.15 |
+| Chain, 3,000 nodes | 551.17 → 4.92 | 1,076.34 → 14.40 | Stack error → 13.20 |
+| Completed chain, all parents folded | 684.09 → 5.81 | 1,236.34 → 18.16 | Stack error → 18.05 |
+
+Each column runs independently; full layout deliberately uses all 3,000 input nodes even for the folded fixture. It does not measure the UI's one-node folded projection. These are computation measurements, excluding DOM updates, painting and source collection. Shallow forests show no general speedup; deep chains are adversarial stress cases.
+
+Synthetic browser checks verified a 61-node Live chain with all old ancestors present, List filtering across 3,000 rows, a completed 3,000-node tree folded to one visible parent with 2,999 hidden descendants, and selection of its deepest row revealing every ancestor on return to Graph. No JavaScript console errors were captured during these checks. The fully expanded extreme graph nevertheless caused repeated browser-control/screenshot timeouts and subsequently an in-app browser page crash. Browser rendering and automation overhead have not yet been isolated. This release fixes the computation failure, not end-to-end responsiveness at arbitrary scale; profiling and reducing SVG detail are the next checks.
+
+A separate 60-second read-only health observation recorded **60/60 current, non-degraded samples**, zero stale/unavailable samples and reported collection durations of **165–248 ms, median 193 ms**. This is a bounded health sample of the existing v0.9 collector, not a new collector change or uptime guarantee. No real transcript content was used in fixtures or copied into the repository.
+
+Release checks: all 53 JavaScript files passed syntax checks, all 81 local documentation links and anchors resolved, and `git diff --check` passed. An independent publication audit found no unintended runtime files or apparent credentials in the current inventory or existing history; its only credential-pattern match was an intentional redaction-test fixture. The native app was rebuilt as **0.9.1**, its signature verified, and its reopened window showed Current with Graph/List controls. The existing background service stayed healthy. Temporary synthetic servers were stopped. A real logout/login cycle remains untested.
 
 ## v0.9 repository release checks — 2026-10-18
 

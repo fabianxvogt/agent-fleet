@@ -72,8 +72,7 @@ export function selectVisible(snapshot, { scope = "live", agents = null, query =
   // Restore context only while every ancestor passes the explicit filters.
   for (const id of [...keep]) {
     let cur = parentOf.get(id);
-    let guard = 0;
-    while (cur && !keep.has(cur) && guard++ < 20) {
+    while (cur !== undefined && !keep.has(cur)) {
       const n = byId.get(cur);
       if (!n || !matchesFilters(n, { agents, query, project, status })) break;
       keep.add(cur);
@@ -86,7 +85,7 @@ export function selectVisible(snapshot, { scope = "live", agents = null, query =
   return { nodes, edges, parked: new Map([...parked].filter(([, c]) => c > 0)) };
 }
 
-/** Each node gets at most one tree parent: spawn edges beat inferred process edges. */
+/** Each node gets at most one tree parent in O(nodes + edges); spawn beats process edges. */
 export function treeParents(nodes, edges) {
   const ids = new Set(nodes.map((n) => n.id));
   const best = new Map();
@@ -96,19 +95,27 @@ export function treeParents(nodes, edges) {
     if (!prev || TREE_EDGE_RANK[e.kind] < TREE_EDGE_RANK[prev.kind]) best.set(e.to, e);
   }
   const parent = new Map([...best].map(([to, e]) => [to, e.from]));
-  // break cycles defensively: only cut a node that is itself on the cycle
-  for (const id of [...parent.keys()]) {
-    const seen = new Set([id]);
-    let cur = parent.get(id);
-    while (cur) {
-      if (cur === id) {
-        parent.delete(id);
-        break;
-      }
-      if (seen.has(cur)) break; // leads into a cycle elsewhere; that cycle's own member gets cut
-      seen.add(cur);
+  // Visit each chain once. Preserve the original deterministic choice: cut the
+  // first parent entry that belongs to the cycle, never a tail leading into it.
+  const rank = new Map([...parent.keys()].map((id, i) => [id, i]));
+  const visited = new Map(); // 1 = this path, 2 = settled
+  for (const id of parent.keys()) {
+    if (visited.has(id)) continue;
+    const path = [];
+    let cur = id;
+    while (cur !== undefined && !visited.has(cur)) {
+      visited.set(cur, 1);
+      path.push(cur);
       cur = parent.get(cur);
     }
+    if (visited.get(cur) === 1) {
+      let cut = cur;
+      for (let member = parent.get(cur); member !== cur; member = parent.get(member)) {
+        if (rank.get(member) < rank.get(cut)) cut = member;
+      }
+      parent.delete(cut);
+    }
+    for (const member of path) visited.set(member, 2);
   }
   return parent;
 }
@@ -145,6 +152,9 @@ function completionForest(nodes, parents, isFinished) {
  * Hide confidently finished child branches, retaining their parent as the control.
  * Check the full snapshot as well as the filtered tree: filtering out an active
  * descendant or its preferred parent must never make that work look completed.
+ * hiddenIds supports membership/counts; revealPath(id) returns a fresh root-first
+ * list of folded controls to reopen (empty for visible or unknown nodes).
+ * Projection storage is linear; a reveal walks only the selected node's fold path.
  */
 export function collapseCompleted(snapshot, visible, collapsedParents = new Set()) {
   const fullParents = treeParents(snapshot.nodes, snapshot.edges);
@@ -163,25 +173,35 @@ export function collapseCompleted(snapshot, visible, collapsedParents = new Set(
     if (eligibleCount > 0) controls.set(parent, { eligibleCount, hiddenCount: 0 });
   }
 
-  // Each hidden node records all folded ancestors, including controls that are
-  // themselves hidden, so selecting it can reopen the complete path in one step.
-  const hiddenBy = new Map();
-  const pending = visible.nodes.filter((node) => !parents.has(node.id)).map((node) => ({ id: node.id, ancestors: [] }));
+  // Share fold paths instead of copying an ancestor array for every descendant.
+  // Only a requested reveal materializes its root-to-leaf list of controls.
+  const hiddenIds = new Set();
+  const paths = new Map();
+  const pending = visible.nodes.filter((node) => !parents.has(node.id)).map((node) => ({ id: node.id, path: null }));
   for (let index = 0; index < pending.length; index++) {
-    const { id, ancestors } = pending[index];
-    if (ancestors.length) hiddenBy.set(id, ancestors);
+    const { id, path } = pending[index];
+    if (path) {
+      hiddenIds.add(id);
+      paths.set(id, path);
+    }
     const control = controls.get(id);
     const folded = collapsedParents.has(id) && control;
     // Only exposed controls own a hidden count; nested folds do not double-count.
-    if (folded && !ancestors.length) control.hiddenCount = control.eligibleCount;
+    if (folded && !path) control.hiddenCount = control.eligibleCount;
+    const foldedPath = folded ? { id, previous: path } : path;
     for (const child of children.get(id) ?? []) {
-      pending.push({ id: child, ancestors: folded && eligibleBranches.has(child) ? [...ancestors, id] : ancestors });
+      pending.push({ id: child, path: eligibleBranches.has(child) ? foldedPath : path });
     }
   }
-  const nodes = visible.nodes.filter((node) => !hiddenBy.has(node.id));
+  const revealPath = (id) => {
+    const ancestors = [];
+    for (let path = paths.get(id); path; path = path.previous) ancestors.push(path.id);
+    return ancestors.reverse();
+  };
+  const nodes = visible.nodes.filter((node) => !hiddenIds.has(node.id));
   const ids = new Set(nodes.map((node) => node.id));
   const edges = visible.edges.filter((edge) => ids.has(edge.from) && ids.has(edge.to));
-  return { nodes, edges, controls, hiddenBy };
+  return { nodes, edges, controls, hiddenIds, revealPath };
 }
 
 const activity = (n) => Date.parse(n.lastActivityAt ?? 0) || 0;
@@ -209,26 +229,34 @@ export function layout(nodes, edges, viewport = { width: 1600, height: 900 }, st
     laneMap.get(key).push(r);
   }
 
-  const subtreeStats = new Map();
-  const stats = (n) => {
-    if (subtreeStats.has(n.id)) return subtreeStats.get(n.id);
-    const s = { working: n.status === "working" && !n.meta?.dataStale ? 1 : 0, waiting: n.status === "waiting" ? 1 : 0, failed: n.status === "failed" ? 1 : 0, last: activity(n), size: 1 };
-    for (const c of children.get(n.id) ?? []) {
-      const cs = stats(c);
-      s.working += cs.working;
-      s.waiting += cs.waiting;
-      s.failed += cs.failed;
-      s.last = Math.max(s.last, cs.last);
-      s.size += cs.size;
-    }
-    subtreeStats.set(n.id, s);
-    return s;
-  };
+  // Aggregate leaves toward their roots without using the JavaScript call stack.
+  const subtreeStats = new Map(nodes.map((n) => [n.id, {
+    working: n.status === "working" && !n.meta?.dataStale ? 1 : 0,
+    waiting: n.status === "waiting" ? 1 : 0,
+    failed: n.status === "failed" ? 1 : 0,
+    last: activity(n), size: 1,
+  }]));
+  const remaining = new Map([...children].map(([id, kids]) => [id, kids.length]));
+  const queue = nodes.filter((n) => !children.has(n.id)).map((n) => n.id);
+  for (let index = 0; index < queue.length; index++) {
+    const id = queue[index];
+    const p = parent.get(id);
+    if (p === undefined) continue;
+    const s = subtreeStats.get(p);
+    const cs = subtreeStats.get(id);
+    s.working += cs.working;
+    s.waiting += cs.waiting;
+    s.failed += cs.failed;
+    s.last = Math.max(s.last, cs.last);
+    s.size += cs.size;
+    remaining.set(p, remaining.get(p) - 1);
+    if (remaining.get(p) === 0) queue.push(p);
+  }
 
   const lanes = [...laneMap].map(([project, rs]) => {
-    rs.sort((a, b) => stats(b).working - stats(a).working || byPriority(a, b));
+    rs.sort((a, b) => subtreeStats.get(b.id).working - subtreeStats.get(a.id).working || byPriority(a, b));
     const agg = rs.reduce((acc, r) => {
-      const s = stats(r);
+      const s = subtreeStats.get(r.id);
       return { working: acc.working + s.working, waiting: acc.waiting + s.waiting, failed: acc.failed + s.failed, last: Math.max(acc.last, s.last), size: acc.size + s.size };
     }, { working: 0, waiting: 0, failed: 0, last: 0, size: 0 });
     return { project, roots: rs, ...agg };
@@ -246,19 +274,21 @@ export function layout(nodes, edges, viewport = { width: 1600, height: 900 }, st
   for (const lane of lanes) {
     let row = 0;
     let depthMax = 0;
-    const place = (n, depth) => {
+    const pending = lane.roots.map((node) => ({ node, depth: 0, placedChildren: false })).reverse();
+    while (pending.length) {
+      const { node, depth, placedChildren } = pending.pop();
       depthMax = Math.max(depthMax, depth);
-      const kids = children.get(n.id) ?? [];
-      let cy;
-      if (kids.length === 0) cy = row++;
-      else {
-        const ys = kids.map((k) => place(k, depth + 1));
-        cy = (ys[0] + ys[ys.length - 1]) / 2;
+      const kids = children.get(node.id) ?? [];
+      if (kids.length && !placedChildren) {
+        pending.push({ node, depth, placedChildren: true });
+        for (let i = kids.length - 1; i >= 0; i--) pending.push({ node: kids[i], depth: depth + 1, placedChildren: false });
+        continue;
       }
-      local.set(n.id, { lane, x: LANE_PAD + depth * (CARD_W + GAP_X), y: LANE_HEAD + LANE_PAD + cy * ROW_H });
-      return cy;
-    };
-    for (const r of lane.roots) place(r, 0);
+      const slot = kids.length
+        ? (local.get(kids[0].id).slot + local.get(kids.at(-1).id).slot) / 2
+        : row++;
+      local.set(node.id, { lane, slot, x: LANE_PAD + depth * (CARD_W + GAP_X), y: LANE_HEAD + LANE_PAD + slot * ROW_H });
+    }
     lane.w = LANE_PAD * 2 + (depthMax + 1) * (CARD_W + GAP_X) - GAP_X;
     lane.h = LANE_HEAD + LANE_PAD * 2 + Math.max(1, row) * ROW_H - (ROW_H - CARD_H);
   }

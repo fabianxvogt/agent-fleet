@@ -28,6 +28,7 @@ function app(snap = snapshot(), overflow = 0, preferences = {}) {
   let onTick;
   let now = NOW;
   let layoutCalls = 0;
+  let projectionCalls = 0;
   let inspectorCalls = 0;
   let onResize;
   const openedTabs = [];
@@ -61,6 +62,7 @@ function app(snap = snapshot(), overflow = 0, preferences = {}) {
   const context = vm.createContext({
     ...graphLayout, URL, console,
     layout(...args) { layoutCalls++; return graphLayout.layout(...args); },
+    collapseCompleted(...args) { projectionCalls++; return graphLayout.collapseCompleted(...args); },
     Date: class extends Date { static now() { return now; } },
     createInspector: () => ({ select(...args) { inspectorCalls++; selections.push(args); }, showTab(tab) { openedTabs.push(tab); } }),
     createBrowserView: () => ({ select() {} }),
@@ -93,6 +95,7 @@ function app(snap = snapshot(), overflow = 0, preferences = {}) {
     disconnect: () => eventSource.onerror(),
     tick(ms = 1000) { now += ms; onTick(); },
     layoutCalls: () => layoutCalls,
+    projectionCalls: () => projectionCalls,
     inspectorCalls: () => inspectorCalls,
     view: () => vm.runInContext("({ ...state.view })", context),
     bounds: () => get("viewport").getBBox(),
@@ -294,8 +297,10 @@ test("switching graph and list preserves the selected session and persists the c
   const a = app(snap);
   clickSession(a, "test:0", { element: "waiting" });
   const layouts = a.layoutCalls();
+  const projections = a.projectionCalls();
   a.get("view-list").onclick();
   assert.equal(a.layoutCalls(), layouts, "list rendering must not calculate a graph layout");
+  assert.equal(a.projectionCalls(), projections, "list rendering must not project completed graph branches");
   assert.equal(a.state().selected, "test:0");
   assert.equal(a.get("panel").hidden, false);
   assert.equal(a.selections.at(-1)[0], "test:0");
@@ -305,6 +310,7 @@ test("switching graph and list preserves the selected session and persists the c
   const reopened = app(snap, 0, a.preferences());
   assert.equal(reopened.state().display, "list");
   assert.equal(reopened.layoutCalls(), 0, "a saved list preference must skip the initial graph layout");
+  assert.equal(reopened.projectionCalls(), 0, "a saved list preference must skip the initial graph projection");
   assert.deepEqual(rowIds(reopened), ["test:0", "test:1", "test:2"]);
   clickSession(a, "test:1");
   a.get("view-graph").onclick();
@@ -560,6 +566,34 @@ test("selecting a finished leaf from attention opens every folded ancestor", () 
   assert.equal(a.selections.at(-1)[0], "leaf");
   assert.equal(a.get("panel").hidden, false);
   assertBounded(a);
+});
+
+test("List refreshes and filters skip graph projection, then Graph reveals the selected folded session", () => {
+  const snap = foldSnapshot();
+  const a = app(snap);
+  a.get("collapse-finished").onclick();
+  const projections = a.projectionCalls();
+  const layouts = a.layoutCalls();
+  const folds = a.folds();
+  a.get("view-list").onclick();
+  clickSession(a, "leaf");
+  a.send(snap);
+  changeFilter(a, "project", "project:Alpha");
+  changeFilter(a, "status", "idle");
+  assert.ok(rowIds(a).includes("leaf"));
+  assert.equal(a.state().selected, "leaf");
+  a.health({ ...snap, generatedAt: new Date(NOW + 1000).toISOString() });
+  a.tick();
+  assert.equal(a.projectionCalls(), projections);
+  assert.equal(a.layoutCalls(), layouts);
+  assert.deepEqual(a.folds(), folds);
+  a.get("reset-filters").onclick();
+  a.get("view-graph").onclick();
+  assert.equal(a.state().selected, "leaf");
+  assert.ok(a.state().visibleIds.includes("leaf"));
+  assert.deepEqual(a.folds(), []);
+  assert.ok(a.projectionCalls() > projections);
+  assert.equal(a.selections.at(-1)[0], "leaf");
 });
 
 test("explicit folding moves selected child details to the visible ancestor", () => {

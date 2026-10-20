@@ -173,11 +173,11 @@ function renderFilters(vis, folded) {
   $("status-filter").value = state.status ?? "all";
   $("reset-filters").hidden = !hasFilters();
   const scope = state.scope === "live" ? "Live" : `Last ${state.snap.windowHours} h`;
-  const hidden = state.display === "graph" ? folded.hiddenBy.size : 0;
+  const hidden = folded?.hiddenIds.size ?? 0;
   const count = hidden ? `${vis.nodes.length} matches · ${folded.nodes.length} shown · ${hidden} folded` : `${vis.nodes.length} shown`;
   $("filter-summary").textContent = `${count} · ${scope}${state.project !== null ? ` · ${state.project || "Unknown project"}` : ""}${state.status ? ` · ${STATUS_LABEL[state.status]}` : ""}`;
   $("graph-fold-controls").hidden = state.display !== "graph";
-  $("collapse-finished").disabled = ![...folded.controls].some(([id]) => !state.collapsedParents.has(id));
+  $("collapse-finished").disabled = !folded || ![...folded.controls].some(([id]) => !state.collapsedParents.has(id));
   $("expand-finished").disabled = state.collapsedParents.size === 0;
   $("empty-title").textContent = hasFilters() ? "No matching sessions" : state.scope === "live" ? "No live agent sessions" : "No sessions in this time window";
   $("empty-description").textContent = hasFilters()
@@ -204,10 +204,10 @@ function render() {
   const vis = selectVisible(snap, filterOptions());
   const knownIds = new Set(snap.nodes.map((n) => n.id));
   for (const id of state.collapsedParents) if (!knownIds.has(id)) state.collapsedParents.delete(id);
-  let folded = collapseCompleted(snap, vis, state.collapsedParents);
+  let folded = state.display === "graph" ? collapseCompleted(snap, vis, state.collapsedParents) : null;
   // Keep a selected session visible if a refresh completes a previously active branch.
-  if (state.display === "graph" && folded.hiddenBy.has(state.selected)) {
-    for (const id of folded.hiddenBy.get(state.selected)) state.collapsedParents.delete(id);
+  if (folded?.hiddenIds.has(state.selected)) {
+    for (const id of folded.revealPath(state.selected)) state.collapsedParents.delete(id);
     folded = collapseCompleted(snap, vis, state.collapsedParents);
   }
   state.folded = folded;
@@ -603,9 +603,8 @@ function centerOn(id) {
 
 function select(id, { center = false, live = false } = {}) {
   state.selected = id;
-  const hiddenBy = state.display === "graph" && state.folded?.hiddenBy.get(id);
-  if (hiddenBy) {
-    for (const parent of hiddenBy) state.collapsedParents.delete(parent);
+  if (state.display === "graph" && state.folded?.hiddenIds.has(id)) {
+    for (const parent of state.folded.revealPath(id)) state.collapsedParents.delete(parent);
     state.needsFit = true;
     render();
   } else {
@@ -636,9 +635,9 @@ function changeCollapse(parents) {
   if (!state.snap) return;
   state.collapsedParents = parents;
   const projected = collapseCompleted(state.snap, selectVisible(state.snap, filterOptions()), parents);
-  if (projected.hiddenBy.has(state.selected)) {
+  if (projected.hiddenIds.has(state.selected)) {
     const drawn = new Set(projected.nodes.map((n) => n.id));
-    state.selected = projected.hiddenBy.get(state.selected).find((id) => drawn.has(id)) ?? null;
+    state.selected = projected.revealPath(state.selected).find((id) => drawn.has(id)) ?? null;
   }
   state.needsFit = true;
   render();

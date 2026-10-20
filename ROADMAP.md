@@ -1,11 +1,12 @@
 # Roadmap
 
 ## Now
-- v0.9 fixes source-update barriers, skipped refresh deadlines and macOS service throttling. Independent source updates now complement graph folding, list/project focus and attention. Validate sustained daily freshness and larger-project readability; agentsview remains the background archive.
+- v0.9.1 fixes deep-tree computation failures and missing ancestry on top of v0.9's independent source updates. List filtering and folded large trees are verified; fully expanded extreme graphs still need rendering work. Validate sustained daily freshness and larger-project readability; agentsview remains the background archive.
 
 ## Next
-- **Scale and sustained freshness:** validate the v0.9 source isolation and service scheduling over longer daily workloads; use process-stage timings to investigate any remaining outliers. Measure larger graph/list responsiveness before selecting virtualization or layout work.
-- **Artifact previews:** explicitly associated image/file outputs, with safe access and rendering. Current Results displays text/tool outputs and agent responses.
+- **Large-graph rendering:** profile SVG/DOM rendering and reduce offscreen or unreadable detail. A fully expanded 3,000-level chain still caused browser-control timeouts and an in-app browser page crash after the computation fixes; List and folded views worked. Preserve selection, keyboard access and relation visibility. [Evidence](docs/VERIFICATION.md#v091-deep-tree-robustness--2026-10-20).
+- **v0.10 artifact previews:** Files in Results, raster images, escaped text/code previews and explicit document downloads, with session-bound access and useful missing/restricted states. Preserve previews across polling and work in the native app. [Design and acceptance checks](docs/ARTIFACTS.md); current Results still displays text/tool outputs and agent responses.
+- **Sustained freshness:** continue daily freshness checks using process-stage timings for outliers. The latest 60 health samples were current; finite samples do not establish an uptime guarantee.
 - **Browser coverage:** validate automatic discovery during normal terminal-agent work. Private-pipe-only browser tools need a runtime-specific export; iframe click coordinates and following an owner's active tab remain unimplemented. Newly discovered pages appear in the Live selector.
 - **Attention coverage:** validate supported input/approval events in everyday use; extend runtime-specific formats when evidence is available. Prose questions stay labeled as inferred; bounded tails cannot recover omitted events.
 - **OMP inter-agent messages:** `irc:incoming`, `async-result` and `live-delegation` custom messages become `message`/`report` edges.
@@ -23,6 +24,12 @@
 - Remote machines over SSH (same adapters, remote `ps`/`lsof`).
 
 ## Done
+- 2026-10-20 v0.9.1 deep-tree robustness (`INCREMENTAL / EMPIRICAL`):
+  - complete filtered ancestry, linear cycle detection and iterative layout remove the reproduced 20-ancestor truncation and 3,000-level call-stack failure
+  - shared fold paths replace duplicated ancestor arrays; List avoids graph-fold computation while preserving selection and fold preferences
+  - reproducible synthetic benchmark: 3,000-level selection median 551 → 4.9 ms, fold projection 1,076 → 14.4 ms; full layout completes in 13.2 ms, previously a stack error
+  - 184 tests pass without skips; independent comparison of 500 seeded graphs preserves existing ordering, geometry and folding semantics; browser rendering limits remain above
+  - [verification and benchmark limits](docs/VERIFICATION.md#v091-deep-tree-robustness--2026-10-20); artifact previews designed for v0.10, not implemented
 - 2026-10-18 v0.9 repository release preparation (`INCREMENTAL / EMPIRICAL`):
   - fresh-clone README with synthetic preview; separate usage, development and verification references; removed unnecessary real-project examples
   - documented checks, sequential browser integration tests and ignore rules for local credentials/runtime state and generated output

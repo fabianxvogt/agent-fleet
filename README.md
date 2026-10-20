@@ -82,6 +82,8 @@ Automatic browser discovery requires a supported dedicated Chromium profile, an 
 
 Status recognition follows each runtime's recorded events. Pi/OMP activity can still rely on file recency, and OpenCode currently has process metadata only. A completed reply can leave its session idle; it does not necessarily mean the session ended. Source freshness is shown separately from session status.
 
+For very large trees, use the compact List, project/status filters or Collapse finished. Deep-tree computation is stack-safe, but fully expanded extreme graphs can still overwhelm browser rendering. See the [measured limits](docs/VERIFICATION.md#v091-deep-tree-robustness--2026-10-20).
+
 ## Development and documentation
 
 ```bash
@@ -98,4 +100,4 @@ Tests use Node's built-in runner and synthetic fixtures. Browser integration tes
 - [Verification notes](docs/VERIFICATION.md): measured behavior, checks and remaining limits.
 - [Roadmap](ROADMAP.md): completed work and next steps.
 
-**Current version: v0.9.0.** This is an evolving local tool, classified as **INCREMENTAL / EMPIRICAL** engineering. Compatibility and performance are backed by the documented checks, not a guarantee for every agent version or host workload.
+**Current version: v0.9.1.** This is an evolving local tool, classified as **INCREMENTAL / EMPIRICAL** engineering. Compatibility and performance are backed by the documented checks, not a guarantee for every agent version or host workload.

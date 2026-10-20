@@ -25,6 +25,19 @@ xcrun swiftc -swift-version 5 -typecheck -framework AppKit -framework WebKit des
 xcrun swiftc -swift-version 5 -typecheck -framework AppKit desktop/Icon.swift
 ```
 
+For graph computation changes, run the synthetic benchmark:
+
+```bash
+npm run benchmark:layout
+npm run benchmark:layout -- --baseline bbe95c1
+```
+
+It measures selection, fold projection and full layout independently on balanced
+and deep 1,000/3,000-session fixtures. The optional baseline reads the historical
+self-contained layout module from Git without changing the checkout. Versions
+are interleaved; compare medians across the three samples. Deep chains are stress
+cases, and these measurements exclude browser painting and source collection.
+
 Use the [desktop instructions](DESKTOP.md) for a full app build and local install.
 UI changes should also be checked in a browser or the native window, using
 synthetic sessions for screenshots and fixtures. Do not run two dashboard servers
