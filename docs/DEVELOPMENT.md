@@ -21,7 +21,7 @@ are removed by their cleanup hooks.
 For changes to the native window, also type-check with the Xcode command-line tools:
 
 ```bash
-xcrun swiftc -swift-version 5 -typecheck -framework AppKit -framework WebKit desktop/AgentFleet.swift
+xcrun swiftc -swift-version 5 -typecheck -framework AppKit -framework WebKit -framework UserNotifications desktop/AgentFleet.swift desktop/AttentionNotifications.swift
 xcrun swiftc -swift-version 5 -typecheck -framework AppKit desktop/Icon.swift
 ```
 
@@ -52,6 +52,7 @@ on the same port; an installed background service already owns the default port.
 | `src/adapters/session-relations.mjs`, `src/session-branch.mjs` | OMP identity/communication evidence and shared active-branch selection |
 | `src/collector.mjs`, `src/procs.mjs` | Independent source refreshes, process ownership and freshness |
 | `src/attention.mjs` | Supported input, completion and failure events |
+| `src/notifications.mjs`, `desktop/AttentionNotifications.swift` | Metadata-only attention feed and opt-in native notification monitor |
 | `src/server.mjs`, `src/details.mjs`, `src/session-content.mjs` | Local HTTP/SSE server and bounded inspector content |
 | `src/artifacts.mjs`, `ui/artifact-view.js` | Session-associated files, filesystem access policy and on-demand previews |
 | `src/browser/` | Managed browsers, discovery and observation of supported existing browsers |

@@ -13,12 +13,13 @@ const snapshot = (count = 8, chain = false) => ({
     project: chain ? "Test project" : `Project ${i % 3}`, status: i ? "working" : "waiting", meta: {},
   })),
   edges: chain ? Array.from({ length: count - 1 }, (_, i) => ({ from: `test:${i}`, to: `test:${i + 1}`, kind: "spawn" })) : [],
-  counts: { working: count - 1, waiting: 1 }, adapters: [], windowHours: 12, collectMs: 1, intervalMs: 4000, generatedAt: new Date(NOW).toISOString(),
+  counts: { working: count - 1, waiting: 1 }, adapters: [], windowHours: 12, collectMs: 1, intervalMs: 4000,
+  generatedAt: new Date(NOW).toISOString(), processObservedAt: new Date(NOW).toISOString(),
 });
 
 // Run the production event handlers with synthetic data and only the DOM surface they use.
 // Browser verification covers actual SVG rendering and element geometry separately.
-function app(snap = snapshot(), preferences = {}) {
+function app(snap = snapshot(), preferences = {}, url = "http://127.0.0.1:7420/") {
   const elements = new Map();
   const writes = new Map();
   const storage = new Map(Object.entries(preferences));
@@ -26,6 +27,8 @@ function app(snap = snapshot(), preferences = {}) {
   let height = 760;
   const eventHandlers = {};
   const documentHandlers = {};
+  const windowHandlers = {};
+  const location = { href: url };
   let eventSource;
   let onTick;
   let now = NOW;
@@ -37,7 +40,7 @@ function app(snap = snapshot(), preferences = {}) {
   const selections = [];
   const get = (id) => {
     if (!elements.has(id)) elements.set(id, {
-      hidden: id === "panel", dataset: {}, handlers: {},
+      hidden: ["panel", "session-link-notice"].includes(id), dataset: {}, handlers: {},
       get innerHTML() { return this.html ?? ""; },
       set innerHTML(value) { this.html = value; writes.set(id, (writes.get(id) ?? 0) + 1); },
       classList: { add() {}, remove() {}, toggle() {} },
@@ -66,7 +69,11 @@ function app(snap = snapshot(), preferences = {}) {
     createInspector: () => ({ select(...args) { inspectorCalls++; selections.push(args); }, showTab(tab) { openedTabs.push(tab); } }),
     createLiveView: () => ({ select() {} }),
     document: { getElementById: get, querySelectorAll: (selector) => selector === "[data-scope]" ? scopes : [], addEventListener(type, fn) { documentHandlers[type] = fn; } },
-    window: { addEventListener() {} },
+    window: {
+      location,
+      history: { replaceState(_state, _title, value) { location.href = new URL(value, location.href).href; } },
+      addEventListener(type, fn) { windowHandlers[type] = fn; },
+    },
     localStorage: { getItem: (key) => storage.get(key) ?? null, setItem: (key, value) => storage.set(key, value) },
     setInterval(fn) { onTick = fn; }, setTimeout() {}, clearTimeout() {},
     ResizeObserver: class {
@@ -83,6 +90,8 @@ function app(snap = snapshot(), preferences = {}) {
   send(snap);
   return {
     send,
+    navigate(value) { location.href = new URL(value, location.href).href; windowHandlers.popstate?.(); },
+    url: () => location.href,
     get,
     openedTabs,
     selections,
@@ -230,7 +239,7 @@ test("health ticks refresh age without relayout or reselecting the inspector and
   assert.equal(a.get("canvas").dataset.freshness, "stale");
   assert.equal(a.get("data-notice").hidden, false);
   assert.equal(a.get("panel-data-notice").hidden, false);
-  a.health({ ...snap, generatedAt: new Date(NOW + 13_000).toISOString(), adapters: [{ ...snap.adapters[0], lastSuccessAt: new Date(NOW + 13_000).toISOString() }] });
+  a.health({ ...snap, generatedAt: new Date(NOW + 13_000).toISOString(), processObservedAt: new Date(NOW + 13_000).toISOString(), adapters: [{ ...snap.adapters[0], lastSuccessAt: new Date(NOW + 13_000).toISOString() }] });
   assert.match(a.get("pulse-text").textContent, /^Current/);
   assert.match(a.get("sources").innerHTML, /updated just now/);
   assert.equal(a.get("canvas").dataset.freshness, "current");
@@ -251,7 +260,7 @@ test("a slow collection does not extend freshness and source failures explain re
   assert.match(a.get("pulse-text").textContent, /^Slow update/);
   a.tick(13_000);
   assert.match(a.get("pulse-text").textContent, /^Delayed/);
-  a.health({ ...snap, generatedAt: new Date(NOW + 13_000).toISOString(), degraded: true, adapters: [{ label: "Claude", nodes: 2, error: "Cannot read <private path>", stale: true, retained: true, lastSuccessAt: snap.generatedAt }] });
+  a.health({ ...snap, generatedAt: new Date(NOW + 13_000).toISOString(), processObservedAt: new Date(NOW + 13_000).toISOString(), degraded: true, adapters: [{ label: "Claude", nodes: 2, error: "Cannot read <private path>", stale: true, retained: true, lastSuccessAt: snap.generatedAt }] });
   assert.match(a.get("pulse-text").textContent, /^Source unavailable/);
   assert.match(a.get("sources").innerHTML, /cached · unavailable/);
   assert.match(a.get("sources").innerHTML, /updated 13s ago/);
@@ -577,7 +586,7 @@ test("health-only updates and age ticks leave list rows, scroll and inspector in
   const selections = a.inspectorCalls();
   a.tick(13_000);
   assert.match(a.get("pulse-text").textContent, /^Delayed/);
-  a.health({ ...snap, generatedAt: new Date(NOW + 13_000).toISOString() });
+  a.health({ ...snap, generatedAt: new Date(NOW + 13_000).toISOString(), processObservedAt: new Date(NOW + 13_000).toISOString() });
   assert.match(a.get("pulse-text").textContent, /^Current/);
   assert.equal(a.writes("session-rows"), writes);
   assert.equal(a.layoutCalls(), layouts);
@@ -781,7 +790,7 @@ test("health and age updates preserve a folded graph without layout or inspector
   const shown = a.state().visibleIds;
   const folds = a.folds();
   a.tick(13_000);
-  a.health({ ...snap, generatedAt: new Date(NOW + 13_000).toISOString() });
+  a.health({ ...snap, generatedAt: new Date(NOW + 13_000).toISOString(), processObservedAt: new Date(NOW + 13_000).toISOString() });
   assert.equal(a.layoutCalls(), layouts);
   assert.equal(a.writes("viewport"), writes);
   assert.equal(a.inspectorCalls(), selections);
@@ -975,4 +984,107 @@ test("compact source freshness recovers through health decoration after a stale 
   a.health(snap);
   assert.equal(classes.get("data-stale"), false);
   assert.equal(a.writes("viewport"), writes, "health recovery must restore color without replacing the graph");
+});
+
+test("session links open parked sessions despite saved filters and preserve unrelated URL state", () => {
+  const snap = snapshot(2);
+  snap.nodes[1].status = "idle";
+  const a = app(snap, { "agent-fleet:hiddenAgents": JSON.stringify(["claude", "omp"]) },
+    "http://127.0.0.1:7420/?session=test%3A1&view=example#details");
+  assert.equal(a.state().selected, "test:1");
+  assert.equal(a.state().scope, "all");
+  assert.ok(a.state().visibleIds.includes("test:1"));
+  assert.deepEqual(a.state().hiddenAgents, ["omp"]);
+  assert.equal(a.url(), "http://127.0.0.1:7420/?view=example#details");
+  assert.equal(a.get("session-link-notice").hidden, true);
+});
+
+test("session links reveal folded ancestors and remove obstructing filters in either view", () => {
+  for (const display of ["graph", "list"]) {
+    const a = app(foldSnapshot());
+    a.get("collapse-finished").onclick();
+    assert.ok(a.folds().includes("root"));
+    if (display === "list") a.get("view-list").onclick();
+    changeFilter(a, "project", "project:Other");
+    changeFilter(a, "status", "working");
+    a.get("search").handlers.input({ target: { value: "missing" } });
+    a.navigate("/?session=leaf");
+    assert.equal(a.state().selected, "leaf");
+    assert.equal(a.state().project, null);
+    assert.equal(a.state().status, null);
+    assert.equal(a.state().query, "");
+    assert.equal(a.state().display, display);
+    assert.ok(a.state().visibleIds.includes("leaf"));
+    if (display === "list") a.get("view-graph").onclick();
+    assert.ok(!a.folds().includes("root") && !a.folds().includes("finished"));
+  }
+});
+
+test("a session link waits for incomplete or failed sources and opens after recovery", () => {
+  const snap = snapshot(0);
+  snap.adapters = [{ id: "claude", observedAt: null, updating: true }];
+  const a = app(snap, {}, "http://127.0.0.1:7420/?session=test%3A1");
+  assert.match(a.get("session-link-message").textContent, /Waiting for its source/);
+  a.health({ ...snap, adapters: [{ id: "claude", observedAt: snap.generatedAt, stale: true, error: "Unavailable" }] });
+  assert.match(a.url(), /session=/);
+  assert.equal(a.state().selected, null);
+  const recovered = snapshot(2);
+  recovered.adapters = [{ id: "claude", observedAt: recovered.generatedAt }];
+  a.send(recovered);
+  assert.equal(a.state().selected, "test:1");
+  assert.equal(a.get("session-link-notice").hidden, true);
+  assert.equal(new URL(a.url()).search, "");
+});
+
+test("raw snapshot freshness is checked before declaring a linked session absent", () => {
+  for (const fault of ["snapshot", "source", "process", "error", "future", "invalid"]) {
+    const snap = snapshot(0), old = new Date(NOW - 60_000).toISOString();
+    snap.adapters = [{ id: "claude", observedAt: snap.generatedAt }];
+    if (fault === "snapshot") snap.generatedAt = old;
+    if (fault === "source") snap.adapters[0].observedAt = old;
+    if (fault === "process") snap.processObservedAt = old;
+    if (fault === "error") snap.collectionError = "Synthetic collection failure";
+    if (fault === "future") snap.adapters[0].observedAt = new Date(NOW + 60_000).toISOString();
+    if (fault === "invalid") snap.adapters[0].observedAt = "invalid";
+    const a = app(snap, {}, "http://127.0.0.1:7420/?session=test%3A1");
+    assert.match(a.get("session-link-message").textContent, /Waiting for its source/, fault);
+    assert.match(a.url(), /session=/, fault);
+    a.send(snapshot(2));
+    assert.equal(a.state().selected, "test:1", fault);
+  }
+});
+
+test("an absent session gets a clear notice and cannot hijack a later snapshot", () => {
+  const snap = snapshot(0);
+  snap.adapters = [{ id: "claude", observedAt: snap.generatedAt }];
+  const a = app(snap, {}, "http://127.0.0.1:7420/?session=test%3A1");
+  assert.match(a.get("session-link-message").textContent, /no longer in the current dashboard window/);
+  assert.equal(new URL(a.url()).search, "");
+  a.send(snapshot(2));
+  assert.equal(a.state().selected, null);
+  a.get("dismiss-session-link").onclick();
+  assert.equal(a.get("session-link-notice").hidden, true);
+});
+
+test("invalid session links are consumed without exposing their raw input", () => {
+  for (const query of ["session=", "session=one&session=two", "session=%00hidden", `session=${"x".repeat(513)}`]) {
+    const a = app(snapshot(), {}, `http://127.0.0.1:7420/?${query}&keep=yes`);
+    assert.equal(a.get("session-link-message").textContent, "This session link is not valid.");
+    assert.equal(a.state().selected, null);
+    assert.equal(new URL(a.url()).search, "?keep=yes");
+  }
+});
+
+test("explicit selection and dismissal cancel a link waiting on a source", () => {
+  for (const action of ["select", "dismiss"]) {
+    const snap = snapshot(1);
+    snap.adapters = [{ id: "claude", observedAt: null }];
+    const a = app(snap, {}, "http://127.0.0.1:7420/?session=test%3A1");
+    if (action === "select") clickSession(a, "test:0", { element: "waiting" });
+    else a.get("dismiss-session-link").onclick();
+    a.send(snapshot(2));
+    assert.equal(a.state().selected, action === "select" ? "test:0" : null);
+    assert.equal(a.get("session-link-notice").hidden, true);
+    assert.equal(new URL(a.url()).search, "");
+  }
 });

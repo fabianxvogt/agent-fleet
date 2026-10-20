@@ -1,4 +1,5 @@
 import { readFile } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
 import { createServer } from "node:http";
 import { extname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -6,6 +7,7 @@ import { createCollector, snapshotHealth } from "./collector.mjs";
 import { createDetailsService } from "./details.mjs";
 import { watchPilot } from "./browser/pilot.mjs";
 import { createBrowserCatalog, withBrowserPresence } from "./browser/presence.mjs";
+import { attentionFeed } from "./notifications.mjs";
 
 const UI_DIR = fileURLToPath(new URL("../ui/", import.meta.url));
 const STATIC = { "/": "index.html", "/app.js": "app.js", "/inspector.js": "inspector.js", "/artifact-view.js": "artifact-view.js", "/browser-view.js": "browser-view.js", "/live-view.js": "live-view.js", "/browser-demo": "browser-demo.html", "/browser-demo.js": "browser-demo.js", "/layout.js": "layout.js", "/graph-scene.js": "graph-scene.js", "/style.css": "style.css", "/favicon.svg": "favicon.svg" };
@@ -89,8 +91,9 @@ function json(res, body, cache = "no-cache") {
 }
 
 /** HTTP surface separated from collection so integration tests use synthetic sessions. */
-export function createDashboardServer(collector, details, { clients = new Set(), withExtras = (s) => s, browserConfig = null, browsers = null } = {}) {
+export function createDashboardServer(collector, details, { clients = new Set(), withExtras = (s) => s, browserConfig = null, browsers = null, now = Date.now } = {}) {
   const browserViewers = new Set();
+  const instanceId = randomUUID();
   let artifactRequests = 0;
   const health = () => collector.health?.() ?? snapshotHealth(collector.latest());
   const sendHealth = (data) => {
@@ -114,6 +117,14 @@ export function createDashboardServer(collector, details, { clients = new Set(),
     try {
       if (req.method !== "GET") {
         res.writeHead(405).end();
+      } else if (url.pathname === "/api/attention") {
+        res.setHeader("cache-control", "no-store");
+        if (req.headers["sec-fetch-site"] === "cross-site" || req.headers.origin && req.headers.origin !== `http://${req.headers.host}`) {
+          res.writeHead(403).end("forbidden");
+          return;
+        }
+        const snapshot = collector.latest();
+        json(res, attentionFeed(snapshot, { instanceId, now: now() }), "no-store");
       } else if (url.pathname.startsWith("/api/sessions/")) {
         res.setHeader("cache-control", "no-store");
         if (req.headers["sec-fetch-site"] === "cross-site" || req.headers.origin && req.headers.origin !== `http://${req.headers.host}`) {

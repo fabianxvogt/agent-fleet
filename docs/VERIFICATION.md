@@ -1,6 +1,80 @@
 # Verification and limitations
 
-Historical checks are grouped by feature and date. The latest release checks are for v0.12; older test counts and observations describe earlier revisions. See the [documentation index](README.md) for setup and usage.
+Historical checks are grouped by feature and date. The latest release checks are for v0.13; older test counts and observations describe earlier revisions. See the [documentation index](README.md) for setup and usage.
+
+## v0.13 input notifications and process identity — 2026-10-20
+
+Classification: **INCREMENTAL / EMPIRICAL**. The native app adds opt-in generic
+input notifications; the dashboard adds direct session links. Claude registry
+ownership now compares a supplied process-start identity before accepting a PID.
+See the [notification contract](NOTIFICATIONS.md).
+
+**Executed checks**
+
+- The full sequential suite passes **373 tests, zero failures and zero skips**,
+  including real isolated Chromium integrations and compiled Swift harnesses.
+- Attention tests cover stable request identities, concurrent requests,
+  asynchronous acknowledgements, item-targeted and partial replies, structured
+  failures, branch selection, malformed times and overflow. HTTP tests cover
+  metadata-only responses, origin guards, no-store, one captured snapshot,
+  process/source freshness and immediate collection-error freezing.
+- Native tests cover baseline/recovery rules, bounded deduplication, source
+  independence, transport rejection and streamed size limits, permission changes,
+  late callbacks, original-batch click validation, delivery cleanup and
+  navigation races. Both native suites compile against macOS 13; the full
+  application also type-checks for that deployment target. Session URL tests
+  include plus signs, reserved characters and Unicode.
+- Fifty navigation tests pass, including new direct links through saved agent
+  filters, nested folds and Graph/List views; invalid/missing links; startup,
+  stale source/process snapshots and recovery; and explicit cancellation without
+  later selection hijacking.
+- The Claude fix passed an independent 47-test process/adapter/collector check.
+  A synthetic process probe confirmed the UTC/C `ps lstart` format. Existing
+  batched discovery now includes the token without per-PID subprocesses.
+  Impossible dates, mismatched weekdays and noncanonical formats are rejected.
+- All 69 JavaScript files pass syntax checks, and 158 local documentation
+  links/anchors resolve. The CLI help and whitespace checks pass.
+
+The service was reinstalled and the native app rebuilt as **0.13.0, build 14**.
+Local signature verification passed. The reopened window showed Current,
+Graph/List and **Alerts off**. One post-install health sample reported all five
+sources current, process discovery at 217 ms and collection at 286 ms; the
+attention endpoint was current and complete. This is a bounded readiness check,
+not an uptime claim.
+
+**Browser and native UI checks**
+
+A loopback fixture used actual dashboard/detail services and synthetic Claude
+and Codex logs. A session link opened the correct inspector and consumed only
+its own query parameter; an absent session showed a dismissible notice.
+The browser kept the native-only Alerts control hidden.
+
+The native app used the explicit in-memory notification test mode. Alerts
+started off; enabling with an existing request produced zero deliveries.
+Adding another pending question produced one generic delivery, without
+duplication on repeated observations. Opening that delivery selected the correct
+session. Closing the window and adding a request in another session preserved
+monitoring; reopening showed the second simulated delivery. A simulated
+permission block showed **Alerts blocked** and removed deliveries; recovery
+returned to **Alerts on** without replaying the existing requests. List and the
+generic notification preview were visually checked and captured with synthetic
+data. Test app, browser tab and fixture server were closed afterward.
+
+**Independent review and limits**
+
+Independent backend, navigation/native and PID reviews found and corrected
+partial-answer loss, structured-error handling, collection-failure propagation,
+stale initial-link handling, mutable-URL navigation races, unrelated-session
+notification fallbacks and late delivery/click cleanup. Documentation was checked
+against the resulting recovery behavior.
+
+Real Notification Center permission prompts, delivery and Focus behavior were
+not exercised; the normal preference remains off. The fixture is evidence for
+application behavior, not OS delivery. Bounded log reads cannot recover omitted
+questions; asynchronous replies with an unknown original question count stay
+pending conservatively. Recovery deliberately suppresses catch-up alerts.
+Registry start tokens have one-second precision, and records without `procStart`
+retain legacy PID-only matching. No reboot/login cycle was performed.
 
 ## v0.12 agent relations and branch consistency — 2026-10-20
 

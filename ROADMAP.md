@@ -1,7 +1,7 @@
 # Roadmap
 
 ## Now
-- v0.12.0 adds supported OMP communication and managed-worker relations, clearer navigation between agents and consistent current-branch content. Validate these exchanges in everyday work alongside Files and automatic Live; agentsview remains the separate background archive for OMP/Pi/fleet.
+- v0.13.0 adds opt-in Mac input notifications, direct session links and Claude process-start identity validation. Validate the supported attention flows in everyday work alongside Files, agent relations and automatic Live; agentsview remains the separate background archive for OMP/Pi/fleet.
 
 ## Next
 - **File coverage:** validate supported links/writes in everyday work. External output folders need an explicit access contract; Pi/OMP/fleet archive artifacts need verified branch identity before inclusion. Embedded document rendering remains a later extension. [Current behavior and limits](docs/ARTIFACTS.md).
@@ -10,12 +10,11 @@
 - **Sustained freshness:** continue daily freshness checks using process-stage timings for outliers. The latest 60 health samples were current; finite samples do not establish an uptime guarantee.
 - **Browser coverage:** validate automatic discovery during normal terminal-agent work. Private-pipe-only browser tools need a runtime-specific export; iframe click coordinates and following an owner's active tab remain unimplemented. Newly discovered pages appear in the Live selector.
 - **Attention coverage:** validate supported input/approval events in everyday use; extend runtime-specific formats when evidence is available. Prose questions stay labeled as inferred; bounded tails cannot recover omitted events.
+- **Notification delivery:** validate actual macOS delivery and Focus behavior after the user enables alerts. Current verification uses an injected native notification adapter; default remains off. Recovery intentionally baselines existing requests. [Behavior and limits](docs/NOTIFICATIONS.md).
 - **OMP relation coverage:** validate native task messages and managed L1 send/result receipts against the supported runtime. Content-only `live-delegation`, arbitrary SDK root aliases and incomplete bounded-tail identities need explicit evidence before linking. Result-file existence alone does not prove delivery. [Supported contract](docs/RELATIONS.md).
 - **Branch-aware archive:** obtain reliable OMP/Pi/fleet archive branch identity before merging older messages into the current view or including archive files. Current archive history stays separately expandable.
 - **Codex threads started from Claude:** link them when a Claude Bash call runs `codex exec`/`codex resume` and the thread id shows up in the transcript.
-- **Stale Claude registry check:** compare the registry's `procStart` with the process start time, so a reused pid is caught.
 - **OpenCode adapter:** once its 1.18 session store is located.
-- **Notifications:** a macOS notification when a session switches to *waiting* (opt-in).
 
 ## Later
 - **Proposed native views:** capture a selected game/application window through a local macOS helper; validate with an isolated demo before integrating a real application. Session-to-window mapping and OS recording permission are separate gates.
@@ -25,6 +24,13 @@
 - Remote machines over SSH (same adapters, remote `ps`/`lsof`).
 
 ## Done
+- 2026-10-20 v0.13 input notifications and process identity (`INCREMENTAL / EMPIRICAL`):
+  - opt-in generic native alerts for supported explicit questions/approvals, with per-source recovery baselines and bounded deduplication
+  - direct session links reveal filtered/folded destinations; notification clicks revalidate their original request before selecting
+  - concurrent async questions, partial replies and structured failures keep their separate identities; collector failures immediately pause alerts
+  - Claude registry `procStart` must match the observed canonical process start when present, detecting reused PIDs without extra per-process calls
+  - 373 tests pass without skips; independent reviews and synthetic browser/native checks; service and signed app updated with Alerts off; actual OS delivery remains a user-enabled validation step
+  - [verification and limits](docs/VERIFICATION.md#v013-input-notifications-and-process-identity--2026-10-20)
 - 2026-10-20 v0.12 agent relations and branch consistency (`INCREMENTAL / EMPIRICAL`):
   - structured OMP incoming messages, terminal task reports and matched managed L1 receipts resolve scoped session identities; queued messages and received results have distinct labels
   - managed workers retain their own identity without taking the host process assignment; verified native parents determine flat-directory child hierarchy

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, utimes, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { test } from "node:test";
@@ -78,6 +78,70 @@ test("claude: registry entry of a dead process is ignored", async () => {
   await put(join(home, ".claude", "sessions", "200.json"), { pid: 200, sessionId: "gone", cwd: "/w", status: "busy" });
   const r = await createClaudeAdapter().collect(ctxFor(home, []));
   assert.equal(r.nodes.length, 0);
+});
+
+test("claude: a reused PID cannot keep an older registry session alive", async (t) => {
+  const home = await mkdtemp(join(tmpdir(), "af-claude-reused-pid-"));
+  t.after(() => rm(home, { recursive: true, force: true }));
+  const before = "Fri Oct 16 09:00:00 2026";
+  const current = "Fri Oct 16 11:00:00 2026";
+  const registry = join(home, ".claude", "sessions", "200.json");
+  const adapter = createClaudeAdapter();
+  await put(registry, { pid: 200, sessionId: "old-session", cwd: "/synthetic", status: "busy", procStart: before });
+  const process = proc(200, 1, "claude", { procStart: before });
+  assert.equal((await adapter.collect(ctxFor(home, [process]))).nodes[0].status, "working");
+  process.procStart = current;
+  assert.deepEqual((await adapter.collect(ctxFor(home, [process]))).nodes, [], "the new process does not own the stale registry");
+  await put(registry, { pid: 200, sessionId: "current-session", cwd: "/synthetic", status: "busy", procStart: ` ${current}\n` });
+  const result = await adapter.collect(ctxFor(home, [process]));
+  assert.equal(result.nodes[0].id, "claude:current-session");
+  assert.equal(result.nodes[0].pid, 200);
+  assert.equal(result.nodes[0].status, "working");
+});
+
+test("claude: present invalid or unobserved process identity rejects ownership while legacy absence remains compatible", async (t) => {
+  const home = await mkdtemp(join(tmpdir(), "af-claude-process-identity-"));
+  t.after(() => rm(home, { recursive: true, force: true }));
+  const start = "Fri Oct 16 11:00:00 2026";
+  const registry = join(home, ".claude", "sessions", "200.json");
+  const adapter = createClaudeAdapter();
+  const record = { pid: 200, sessionId: "fixture", cwd: "/synthetic", status: "busy" };
+  for (const procStart of [null, 123, "", " ", {}, "not-a-date", "2026-10-16T11:00:00Z"]) {
+    await put(registry, { ...record, procStart });
+    assert.deepEqual((await adapter.collect(ctxFor(home, [proc(200, 1, "claude", { procStart: start })]))).nodes, [],
+      `invalid registry identity: ${JSON.stringify(procStart)}`);
+  }
+  for (const procStart of [
+    "Fri Feb 30 11:00:00 2026", "Fri Oct 16 24:00:00 2026",
+    "Mon Oct 16 11:00:00 2026", "Tue Oct 06 11:00:00 2026",
+  ]) {
+    await put(registry, { ...record, procStart });
+    assert.deepEqual((await adapter.collect(ctxFor(home, [proc(200, 1, "claude", { procStart })]))).nodes, [],
+      `matching malformed identities must still reject ownership: ${procStart}`);
+  }
+  await put(registry, { ...record, procStart: start });
+  for (const observed of [undefined, null, "", "not-a-date"]) {
+    assert.deepEqual((await adapter.collect(ctxFor(home, [proc(200, 1, "claude", { procStart: observed })]))).nodes, []);
+  }
+  assert.deepEqual((await adapter.collect(ctxFor(home, []))).nodes, []);
+  await put(registry, record);
+  assert.equal((await adapter.collect(ctxFor(home, [proc(200, 1, "claude")]))).nodes[0].pid, 200,
+    "older registries without a start token keep existing ownership behavior");
+});
+
+test("claude: rejecting stale process ownership preserves recently recorded session history", async (t) => {
+  const home = await mkdtemp(join(tmpdir(), "af-claude-reused-history-"));
+  t.after(() => rm(home, { recursive: true, force: true }));
+  await put(join(home, ".claude", "sessions", "200.json"), {
+    pid: 200, sessionId: "fixture", cwd: "/synthetic", status: "busy", procStart: "Fri Oct 16 09:00:00 2026",
+  });
+  const transcript = join(home, ".claude", "projects", "synthetic", "fixture.jsonl");
+  await put(transcript, jsonl({ type: "user", timestamp: "2026-10-16T11:00:00Z", cwd: "/synthetic", message: { content: "Fixture task" } }));
+  const result = await createClaudeAdapter().collect(ctxFor(home, [proc(200, 1, "claude", { procStart: "Fri Oct 16 11:00:00 2026" })]));
+  assert.equal(result.nodes[0].id, "claude:fixture");
+  assert.equal(result.nodes[0].pid, null);
+  assert.equal(result.nodes[0].status, "done");
+  assert.equal(result.nodes[0].transcript, transcript);
 });
 
 test("claude: child errors and completed replies override recency, and only explicit child asks need the human", async () => {

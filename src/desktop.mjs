@@ -41,14 +41,14 @@ export async function installApp(config) {
       <key>CFBundleIdentifier</key><string>${bundleId}</string>
       <key>CFBundleName</key><string>Agent Fleet</string><key>CFBundleDisplayName</key><string>Agent Fleet</string>
       <key>CFBundleExecutable</key><string>AgentFleet</string><key>CFBundlePackageType</key><string>APPL</string>
-      <key>CFBundleShortVersionString</key><string>0.12.0</string><key>CFBundleVersion</key><string>13</string>
+      <key>CFBundleShortVersionString</key><string>0.13.0</string><key>CFBundleVersion</key><string>14</string>
       <key>CFBundleIconFile</key><string>AgentFleet</string><key>NSHighResolutionCapable</key><true/>
       <key>LSMinimumSystemVersion</key><string>13.0</string><key>NSPrincipalClass</key><string>NSApplication</string>
       <key>LSApplicationCategoryType</key><string>public.app-category.developer-tools</string>
       <key>AgentFleetURL</key><string>${escape(url)}</string>
       <key>NSAppTransportSecurity</key><dict><key>NSAllowsLocalNetworking</key><true/></dict>`));
     console.log("Building the Agent Fleet Mac app…");
-    await exec("xcrun", ["swiftc", "-swift-version", "5", "-O", "-framework", "AppKit", "-framework", "WebKit", "-module-cache-path", join(build, "modules"), join(root, "desktop", "AgentFleet.swift"), "-o", join(contents, "MacOS", "AgentFleet")], { timeout: 180_000, maxBuffer: 1024 * 1024 });
+    await exec("xcrun", ["swiftc", "-swift-version", "5", "-O", "-framework", "AppKit", "-framework", "WebKit", "-framework", "UserNotifications", "-module-cache-path", join(build, "modules"), join(root, "desktop", "AgentFleet.swift"), join(root, "desktop", "AttentionNotifications.swift"), "-o", join(contents, "MacOS", "AgentFleet")], { timeout: 180_000, maxBuffer: 1024 * 1024 });
     const icons = join(build, "AgentFleet.iconset");
     await exec("xcrun", ["swift", "-module-cache-path", join(build, "modules"), join(root, "desktop", "Icon.swift"), icons], { timeout: 120_000, maxBuffer: 1024 * 1024 });
     await exec("iconutil", ["-c", "icns", icons, "-o", join(contents, "Resources", "AgentFleet.icns")]);

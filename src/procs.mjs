@@ -28,29 +28,43 @@ export function classifyProcess(comm, args) {
 
 const CANDIDATE_EXES = new Set(["claude", "codex", "omp", "pi", "opencode", "node", "bun"]);
 
+/** Claude's registry uses the C-locale UTC `ps lstart` string as process identity. */
+export function processStartToken(value) {
+  if (typeof value !== "string") return null;
+  const token = value.trim();
+  if (!/^(?:Sun|Mon|Tue|Wed|Thu|Fri|Sat) (?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) [ \d]\d \d{2}:\d{2}:\d{2} \d{4}$/.test(token)) return null;
+  const ms = Date.parse(`${token} UTC`);
+  if (!Number.isFinite(ms)) return null;
+  // Date.parse normalizes some invalid dates and ignores weekday; require the exact ps spelling.
+  const [weekday, day, month, year, time] = new Date(ms).toUTCString().split(" ");
+  const canonical = `${weekday.slice(0, -1)} ${month} ${String(Number(day)).padStart(2, " ")} ${time} ${year}`;
+  return canonical === token ? token : null;
+}
+
 /** Full table of pid/ppid/comm; args are fetched only for executables that may be agents. */
 async function psTable(runStage, signal) {
-  const opts = { maxBuffer: 64 * 1024 * 1024, timeout: 10_000, signal };
+  const opts = { maxBuffer: 64 * 1024 * 1024, timeout: 10_000, signal,
+    env: { ...process.env, LC_ALL: "C", TZ: "UTC" } };
   const { stdout } = await runStage("table", "ps", ["-axww", "-o", "pid=,ppid=,etime=,comm="], opts);
   const procs = new Map();
   for (const line of stdout.split("\n")) {
     const m = line.match(/^\s*(\d+)\s+(\d+)\s+(\S+)\s+(.*)$/);
     if (!m) continue;
-    procs.set(Number(m[1]), { pid: Number(m[1]), ppid: Number(m[2]), etime: m[3], comm: m[4], args: "", agent: null, cwd: null, openFiles: [] });
+    procs.set(Number(m[1]), { pid: Number(m[1]), ppid: Number(m[2]), etime: m[3], comm: m[4], args: "", procStart: null, agent: null, cwd: null, openFiles: [] });
   }
   const candidates = [...procs.values()].filter((p) => CANDIDATE_EXES.has(basename(p.comm))).map((p) => p.pid);
   if (candidates.length) {
     let out = "";
     try {
-      ({ stdout: out } = await runStage("args", "ps", ["-ww", "-o", "pid=,args=", "-p", candidates.join(",")], opts));
+      ({ stdout: out } = await runStage("args", "ps", ["-ww", "-o", "pid=,lstart=,args=", "-p", candidates.join(",")], opts));
     } catch (error) {
       if (error.code !== 1 || error.killed || error.signal) throw error;
       out = error.stdout ?? ""; // a candidate exited in between
     }
     for (const line of out.split("\n")) {
-      const m = line.match(/^\s*(\d+)\s+(.*)$/);
+      const m = line.match(/^\s*(\d+)\s+(.{24})\s+(.*)$/);
       const p = m && procs.get(Number(m[1]));
-      if (p) p.args = m[2];
+      if (p) { p.procStart = processStartToken(m[2]); p.args = m[3]; }
     }
   }
   for (const p of procs.values()) p.agent = classifyProcess(p.comm, p.args);

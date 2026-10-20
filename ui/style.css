@@ -77,6 +77,11 @@ button:focus-visible { outline: 2px solid var(--a-codex); outline-offset: 2px; }
 .filter-field select { background: var(--surface-2); border: 1px solid var(--border); border-radius: 7px; padding: 5px 24px 5px 8px; max-width: 190px; min-width: 115px; }
 .filter-field select:focus-visible { outline: 2px solid var(--a-codex); outline-offset: 2px; }
 .reset-filters { background: none; color: var(--a-codex); border: 0; padding: 4px 0; cursor: pointer; font-size: 12px; }
+.notification-toggle { background: var(--surface-2); border: 1px solid var(--border); border-radius: 7px; color: var(--muted); padding: 5px 9px; cursor: pointer; white-space: nowrap; }
+.notification-toggle[aria-pressed="true"] { color: var(--s-working); }
+.session-link-notice { display: flex; align-items: center; gap: 12px; padding: 10px 16px; color: var(--muted); background: var(--surface-2); border-bottom: 1px solid var(--border); }
+.session-link-notice span { flex: 1; }
+.session-link-notice button { border: 0; background: none; color: var(--a-codex); cursor: pointer; }
 .fold-controls { display: flex; gap: 5px; margin-left: auto; }
 .fold-controls button { background: var(--surface-2); border: 1px solid var(--border); border-radius: 6px; color: var(--muted); padding: 5px 8px; font-size: 11px; cursor: pointer; white-space: nowrap; }
 .fold-controls button:disabled { opacity: 0.4; cursor: default; }

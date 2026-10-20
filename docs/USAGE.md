@@ -1,6 +1,6 @@
 # Using Agent Fleet
 
-Start the dashboard using the [quick start](../README.md#quick-start), or open the installed Mac app. Both present the same views and controls.
+Start the dashboard using the [quick start](../README.md#quick-start), or open the installed Mac app. Both present the same session views; native notifications and document save dialogs are Mac-app features.
 
 ## Graph and list
 
@@ -41,6 +41,20 @@ The attention rail separates:
 - **Recently finished:** replies or sessions completed in the last ten minutes.
 
 Recognition depends on the runtime's logs. Pi/OMP activity can still rely on file recency. Treat the observation timestamp as part of the status: a previous log entry does not prove what a process is doing now.
+
+The Mac app offers **Alerts off/on** in the toolbar for optional input
+notifications. Enabling it requests macOS permission; only new supported explicit
+questions or approvals notify. Closing the window keeps alerts running;
+Command-Q stops them. See [notification behavior and limits](NOTIFICATIONS.md).
+
+A validated notification or `?session=<session ID>` link opens that session even when
+filters, hidden agents or completed-branch folds would obscure it. A missing
+direct-link session shows a dismissible notice. If sources are still loading or unavailable,
+the link waits for fresh data; selecting another session or dismissing the
+notice cancels that pending navigation. Notification clicks recheck their
+original request first. Resolved requests, unavailable data or a mapping lost
+after app restart leave you in the dashboard without choosing another session
+or jumping later.
 
 ## Freshness and unavailable sources
 

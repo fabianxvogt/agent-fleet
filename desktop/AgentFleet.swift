@@ -25,6 +25,15 @@ final class FleetApp: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavig
     private var downloadErrors: [String] = []
     private var closingWindow = false
     private var downloadGeneration = 0
+    private var notifications: AttentionNotifications!
+    private var notificationMenu: NSMenuItem?
+    private var notificationTestMenu: NSMenuItem?
+    private var notificationTestDelivery: MemoryAttentionDelivery?
+    private var notificationIntent = AttentionNavigationIntent()
+    private var dashboardNavigation: WKNavigation?
+    private var dashboardNavigationRevision: Int?
+    private var pageReady = false
+    private let clipboardWorld = WKContentWorld.world(name: "AgentFleetClipboard")
     let testURL: String?
     let dashboard: URL
 
@@ -39,16 +48,44 @@ final class FleetApp: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavig
         super.init()
     }
 
+    func applicationWillFinishLaunching(_ notification: Notification) {
+        // Install the notification delegate before launch completes, including when
+        // a notification is the reason macOS reopens the application.
+        let testing = testURL != nil && CommandLine.arguments.contains("--test-notifications")
+        let delivery: AttentionDelivery
+        if testing {
+            let memory = MemoryAttentionDelivery()
+            notificationTestDelivery = memory; delivery = memory
+        } else {
+            delivery = SystemAttentionDelivery()
+        }
+        notifications = AttentionNotifications(
+            enabled: testing ? false : UserDefaults.standard.bool(forKey: "AgentFleetInputNotifications"),
+            delivery: delivery, fetcher: AttentionHTTPClient(dashboard: dashboard),
+            persist: { enabled in if !testing { UserDefaults.standard.set(enabled, forKey: "AgentFleetInputNotifications") } }
+        )
+        notifications.onChange = { [weak self] in self?.updateNotificationControls() }
+        notifications.onError = { [weak self] message in self?.showNotificationError(message) }
+        notifications.onOpen = { [weak self] session in self?.openNotificationSession(session) }
+        notificationTestDelivery?.onChange = { [weak self] in self?.updateNotificationControls() }
+    }
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.appearance = NSAppearance(named: .darkAqua)
         makeMenu()
         let content = WKUserContentController()
-        let clipboardWorld = WKContentWorld.world(name: "AgentFleetClipboard")
         content.add(self, contentWorld: clipboardWorld, name: "copy")
         content.add(self, contentWorld: clipboardWorld, name: "download")
+        content.add(self, contentWorld: clipboardWorld, name: "notifications")
         content.addUserScript(WKUserScript(source: """
         (() => {
           document.addEventListener('click', event => {
+            const notificationButton = event.target.closest?.('button[data-native-notifications]');
+            if (event.isTrusted && notificationButton) {
+              event.preventDefault(); event.stopImmediatePropagation();
+              window.webkit.messageHandlers.notifications.postMessage('toggle');
+              return;
+            }
             const link = event.target.closest?.('a[download]');
             if (event.isTrusted && link) {
               event.preventDefault(); event.stopImmediatePropagation();
@@ -87,6 +124,7 @@ final class FleetApp: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavig
         NSLayoutConstraint.activate([waiting.centerXAnchor.constraint(equalTo: webView.centerXAnchor), waiting.centerYAnchor.constraint(equalTo: webView.centerYAnchor)])
         if testURL == nil { startService() }
         showWindow()
+        notifications.start()
     }
 
     func makeMenu() {
@@ -105,7 +143,76 @@ final class FleetApp: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavig
         let viewMenu = NSMenu(title: "View"); view.submenu = viewMenu
         let reload = viewMenu.addItem(withTitle: "Reload", action: #selector(reloadPage), keyEquivalent: "r"); reload.target = self
         let browser = viewMenu.addItem(withTitle: "Open in Browser", action: #selector(openInBrowser), keyEquivalent: "o"); browser.target = self; browser.keyEquivalentModifierMask = [.command, .shift]
+        notificationMenu = viewMenu.addItem(withTitle: "Input Notifications — Alerts off", action: #selector(toggleNotifications), keyEquivalent: "")
+        notificationMenu?.target = self
+        if notificationTestDelivery != nil {
+            viewMenu.addItem(.separator())
+            notificationTestMenu = viewMenu.addItem(withTitle: "Simulated notifications: 0", action: #selector(inspectTestNotification), keyEquivalent: "")
+            notificationTestMenu?.target = self
+            let open = viewMenu.addItem(withTitle: "Open latest simulated notification", action: #selector(openTestNotification), keyEquivalent: ""); open.target = self
+            let blocked = viewMenu.addItem(withTitle: "Toggle simulated permission block", action: #selector(toggleTestPermission), keyEquivalent: ""); blocked.target = self
+        }
         NSApp.mainMenu = menu
+    }
+
+    @objc func toggleNotifications() { notifications.toggle() }
+    @objc func openTestNotification() { notificationTestDelivery?.openLatest() }
+    @objc func toggleTestPermission() {
+        guard let delivery = notificationTestDelivery else { return }
+        delivery.status = delivery.status == .blocked ? .allowed : .blocked
+        notifications.checkAuthorization()
+    }
+    @objc func inspectTestNotification() {
+        guard let delivery = notificationTestDelivery, window.attachedSheet == nil else { return }
+        let alert = NSAlert()
+        alert.messageText = "Simulated notifications: \(delivery.requests.count)"
+        if let latest = delivery.requests.last {
+            let title = latest.sessions == 1 ? "An agent needs your input" : "\(latest.sessions) agents need your input"
+            alert.informativeText = title + "\nOpen Agent Fleet to review the request."
+            alert.addButton(withTitle: "Open latest")
+            alert.addButton(withTitle: "Close")
+            alert.beginSheetModal(for: window) { [weak self] result in
+                if result == .alertFirstButtonReturn { self?.openTestNotification() }
+            }
+        } else {
+            alert.informativeText = "No simulated notifications have been delivered. Existing requests are baselined when alerts are enabled."
+            alert.addButton(withTitle: "OK")
+            alert.beginSheetModal(for: window)
+        }
+    }
+    private func updateNotificationControls() {
+        guard let notifications = notifications else { return }
+        notificationMenu?.title = "Input Notifications — Alerts \(notifications.state)"
+        notificationMenu?.state = notifications.enabled ? .on : .off
+        notificationTestMenu?.title = "Simulated notifications: \(notificationTestDelivery?.requests.count ?? 0)"
+        guard pageReady, let webView = webView, sameOrigin(webView.url) else { return }
+        webView.callAsyncJavaScript("""
+          const button = document.querySelector('button[data-native-notifications]#notification-toggle');
+          if (button) {
+            button.hidden = false;
+            button.textContent = 'Alerts ' + state;
+            button.title = detail;
+            button.setAttribute('aria-pressed', enabled ? 'true' : 'false');
+          }
+        """, arguments: ["state": notifications.state, "detail": notifications.detail, "enabled": notifications.enabled], in: nil, in: clipboardWorld, completionHandler: nil)
+    }
+    private func showNotificationError(_ message: String) {
+        guard window != nil, window.isVisible, window.attachedSheet == nil else { return }
+        let alert = NSAlert()
+        alert.messageText = "Input notifications"
+        alert.informativeText = message
+        alert.addButton(withTitle: "OK")
+        alert.beginSheetModal(for: window)
+    }
+    private func openNotificationSession(_ session: String?) {
+        if let session = session { notificationIntent.select(session) }
+        guard window != nil else { return }
+        showWindow()
+        NSApp.activate(ignoringOtherApps: true)
+        if pageReady, notificationIntent.sessionId != nil { needsLoad = true; checkService() }
+    }
+    private func dashboardNavigationURL() -> URL {
+        notificationIntent.url(dashboard: dashboard)
     }
 
     func showWindow() {
@@ -317,7 +424,11 @@ final class FleetApp: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavig
                 guard let self = self else { return }; self.checking = false
                 guard self.window.isVisible else { return }
                 if ready {
-                    if self.needsLoad { self.needsLoad = false; self.webView.load(URLRequest(url: self.dashboard)) }
+                    if self.needsLoad {
+                        self.needsLoad = false; self.pageReady = false
+                        self.dashboardNavigationRevision = self.notificationIntent.revision
+                        self.dashboardNavigation = self.webView.load(URLRequest(url: self.dashboardNavigationURL()))
+                    }
                 } else {
                     self.needsLoad = true; self.waiting.isHidden = false
                     self.waiting.stringValue = "Waiting for the Agent Fleet background service…"
@@ -328,7 +439,17 @@ final class FleetApp: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavig
 
     @objc func reloadPage() { needsLoad = true; checkService() }
     @objc func openInBrowser() { NSWorkspace.shared.open(dashboard) }
-    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) { waiting.isHidden = true }
+    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        waiting.isHidden = true
+        pageReady = sameOrigin(webView.url)
+        if pageReady {
+            // The page may consume ?session with history.replaceState before
+            // didFinish. Completion belongs to the native load, not its final URL.
+            if navigation === dashboardNavigation, let revision = dashboardNavigationRevision { notificationIntent.complete(revision) }
+            updateNotificationControls()
+            if notificationIntent.sessionId != nil { needsLoad = true; checkService() }
+        }
+    }
     private func navigationFailed(_ error: Error) {
         let value = error as NSError
         // Converting a navigation into a download must leave the dashboard loaded.
@@ -366,6 +487,7 @@ final class FleetApp: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavig
     }
     func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
         guard message.frameInfo.isMainFrame, sameOrigin(message.frameInfo.request.url), let text = message.body as? String, text.utf8.count <= 16000 else { return }
+        if message.name == "notifications", text == "toggle" { notifications.toggle(); return }
         if message.name == "download" {
             guard !closingWindow, window.isVisible, let url = URL(string: text), artifactDownloadURL(url) else {
                 showDownloadError("This link is not a downloadable session file."); return
@@ -385,16 +507,25 @@ final class FleetApp: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavig
     }
     func windowWillClose(_ notification: Notification) {
         cancelDownloads()
+        notifications?.cancelPendingNavigation(); notificationIntent.cancel()
         timer?.invalidate(); timer = nil; needsLoad = true
+        pageReady = false
+        dashboardNavigation = nil; dashboardNavigationRevision = nil
         webView.loadHTMLString("", baseURL: nil)
     }
-    func applicationWillTerminate(_ notification: Notification) { cancelDownloads() }
+    func applicationWillTerminate(_ notification: Notification) { notifications?.stop(); cancelDownloads() }
+    func applicationDidBecomeActive(_ notification: Notification) { notifications?.checkAuthorization() }
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool { showWindow(); return true }
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
 }
 
-let application = NSApplication.shared
-let delegate = FleetApp()
-application.setActivationPolicy(.regular)
-application.delegate = delegate
-application.run()
+@main
+struct AgentFleetMain {
+    static func main() {
+        let application = NSApplication.shared
+        let delegate = FleetApp()
+        application.setActivationPolicy(.regular)
+        application.delegate = delegate
+        withExtendedLifetime(delegate) { application.run() }
+    }
+}

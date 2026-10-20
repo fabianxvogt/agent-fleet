@@ -1,6 +1,7 @@
 import { join } from "node:path";
 import { edge, node } from "../model.mjs";
 import { readTurnState } from "../attention.mjs";
+import { processStartToken } from "../procs.mjs";
 import { ageMs, fileCache, isoOrNull, listDir, mapConcurrent, projectName, readHeadRecords, readJson, readTailRecords, statSafe, truncate } from "../util.mjs";
 
 /**
@@ -34,6 +35,10 @@ export function createClaudeAdapter() {
       if (!data?.sessionId || !data.pid) return null;
       const proc = ctx.procs.get(data.pid);
       if (!proc || proc.agent !== "claude") return null; // stale registry file of a dead process
+      if (Object.hasOwn(data, "procStart")) {
+        const expected = processStartToken(data.procStart);
+        if (!expected || expected !== processStartToken(proc.procStart)) return null; // PID reused, or identity unavailable
+      }
       return { ...data, file: join(dir, entry.name) };
     });
     return records.filter(Boolean);

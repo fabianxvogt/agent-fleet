@@ -57,6 +57,10 @@
       </aside>
 
       <main class="workspace">
+        <div id="session-link-notice" class="session-link-notice" hidden>
+          <span id="session-link-message" role="status"></span>
+          <button id="dismiss-session-link" type="button" aria-label="Dismiss session link notice">Dismiss</button>
+        </div>
         <div class="view-toolbar" aria-label="Session view and filters">
           <div class="segmented" role="group" aria-label="View">
             <button id="view-graph" data-view="graph" class="on" aria-pressed="true">Graph</button>
@@ -69,6 +73,7 @@
             <option value="done">Done</option><option value="stale">Stale</option>
           </select></label>
           <button id="reset-filters" class="reset-filters" hidden>Reset filters</button>
+          <button id="notification-toggle" class="notification-toggle" data-native-notifications type="button" aria-pressed="false" title="Notify when an agent asks for input" hidden>Alerts off</button>
           <div id="graph-fold-controls" class="fold-controls" role="group" aria-label="Finished branches">
             <button id="collapse-finished" disabled>Collapse finished</button>
             <button id="expand-finished" disabled>Expand all</button>

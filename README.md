@@ -18,6 +18,7 @@ Agent Fleet reads sessions from **Claude Code, Codex, OhMyPi, Pi and pi-agent-fl
 - **Automatic Live view:** prioritize a supported browser image, then observed terminal commands/output, then the latest agent activity. Show current session status separately from recorded work; readable background notices keep internal runtime markup out of the way.
 - **Files in Results:** preview linked images and text/code, or download supported documents. Files stay associated with their session; missing or restricted files have explicit states.
 - **Native Mac window:** install a standalone dashboard window and login startup, backed by the same local service.
+- **Optional input notifications:** receive generic Mac alerts for new explicit questions or approvals and open the relevant session. Starts off; existing requests are not replayed on startup or recovery.
 
 ## Quick start
 
@@ -105,9 +106,10 @@ Tests use Node's built-in runner and synthetic fixtures. Browser integration tes
 - [File previews](docs/ARTIFACTS.md): associations, supported formats, access and limits.
 - [Agent relations](docs/RELATIONS.md): supported messages/reports, session identities and active branches.
 - [Mac app](docs/DESKTOP.md): installation, startup and removal.
+- [Input notifications](docs/NOTIFICATIONS.md): enablement, privacy, source recovery and delivery limits.
 - [Development guide](docs/DEVELOPMENT.md): repository structure and checks.
 - [Adapter development](docs/ADAPTERS.md): add a session source.
 - [Verification notes](docs/VERIFICATION.md): measured behavior, checks and remaining limits.
 - [Roadmap](ROADMAP.md): completed work and next steps.
 
-**Current version: v0.12.0.** This is an evolving local tool, classified as **INCREMENTAL / EMPIRICAL** engineering. Compatibility and performance are backed by the documented checks, not a guarantee for every agent version or host workload.
+**Current version: v0.13.0.** This is an evolving local tool, classified as **INCREMENTAL / EMPIRICAL** engineering. Compatibility and performance are backed by the documented checks, not a guarantee for every agent version or host workload.

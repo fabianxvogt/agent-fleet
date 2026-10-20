@@ -81,6 +81,76 @@ function ago(iso, now = Date.now()) {
 const clock = (iso) => (iso ? new Date(iso).toLocaleString([], { dateStyle: "short", timeStyle: "short" }) : "—");
 const updateAge = (iso, now) => ago(iso, now) === "now" ? "updated just now" : `updated ${ago(iso, now)} ago`;
 
+/* ---------- session links ---------- */
+
+function linkedSession() {
+  const url = new URL(window.location?.href ?? "http://localhost/");
+  const ids = url.searchParams.getAll("session");
+  if (!ids.length) return null;
+  return ids.length === 1 && ids[0].length > 0 && ids[0].length <= 512 && !/[\x00-\x1f\x7f]/.test(ids[0])
+    ? { id: ids[0] } : { invalid: true };
+}
+
+let pendingSessionLink = linkedSession();
+function sessionLinkNotice(message = "") {
+  $("session-link-notice").hidden = !message;
+  $("session-link-message").textContent = message;
+}
+function clearSessionLink() {
+  pendingSessionLink = null;
+  const url = new URL(window.location?.href ?? "http://localhost/");
+  if (url.searchParams.has("session")) {
+    url.searchParams.delete("session");
+    window.history?.replaceState(null, "", url.pathname + url.search + url.hash);
+  }
+}
+function openLinkedSession() {
+  if (!pendingSessionLink) return;
+  if (pendingSessionLink.invalid) {
+    clearSessionLink();
+    sessionLinkNotice("This session link is not valid.");
+    return;
+  }
+  const target = state.snap?.nodes.find((n) => n.id === pendingSessionLink.id);
+  if (!target) {
+    // The first snapshot can arrive before other sources finish collecting.
+    // An unavailable source is not evidence that its session has disappeared.
+    const health = state.health ?? state.snap;
+    const now = Date.now(), threshold = Math.max((health?.intervalMs ?? 4000) * 3, 10_000);
+    const fresh = (value) => {
+      const at = Date.parse(value);
+      return Number.isFinite(at) && at <= now && now - at <= threshold;
+    };
+    const sources = health?.adapters ?? [];
+    if (state.connected && state.snap && !health?.stale && !health?.collectionError && !health?.processError &&
+        fresh(health?.generatedAt) && fresh(health?.processObservedAt) &&
+        sources.every((s) => fresh(s.observedAt) && !s.stale && !s.error && !s.retained)) {
+      clearSessionLink();
+      sessionLinkNotice("This session is no longer in the current dashboard window.");
+    } else sessionLinkNotice("Finding the linked session. Waiting for its source to update…");
+    return;
+  }
+  const id = target.id;
+  clearSessionLink();
+  sessionLinkNotice();
+  // A notification or direct session link must remain usable with saved filters.
+  state.query = "";
+  state.project = null;
+  state.status = null;
+  state.hiddenAgents.delete(target.agent);
+  savePref("hiddenAgents", [...state.hiddenAgents]);
+  state.scope = "all";
+  state.showParked = true;
+  $("search").value = "";
+  document.querySelectorAll("[data-scope]").forEach((b) => {
+    b.classList.toggle("on", b.dataset.scope === "all");
+    b.setAttribute("aria-selected", String(b.dataset.scope === "all"));
+  });
+  state.needsFit = true;
+  render();
+  select(id, { center: true });
+}
+
 /* ---------- live connection ---------- */
 
 function connect() {
@@ -91,12 +161,14 @@ function connect() {
     state.connected = true;
     state.connectionStarted = true;
     render();
+    openLinkedSession();
   });
   es.addEventListener("health", (ev) => {
     state.health = JSON.parse(ev.data);
     state.connected = true;
     state.connectionStarted = true;
     renderHealth();
+    openLinkedSession();
   });
   es.onopen = () => { state.connected = true; renderHealth(); };
   es.onerror = () => {
@@ -637,6 +709,7 @@ function centerOn(id) {
 }
 
 function select(id, { center = false, live = false } = {}) {
+  if (pendingSessionLink) { clearSessionLink(); sessionLinkNotice(); }
   state.selected = id;
   if (state.display === "graph" && state.folded?.hiddenIds.has(id)) {
     for (const parent of state.folded.revealPath(id)) state.collapsedParents.delete(parent);
@@ -703,6 +776,12 @@ function setDisplay(display) {
 }
 
 function wire() {
+  $("dismiss-session-link").onclick = () => { clearSessionLink(); sessionLinkNotice(); };
+  window.addEventListener("popstate", () => {
+    pendingSessionLink = linkedSession();
+    sessionLinkNotice();
+    openLinkedSession();
+  });
   const canvas = $("canvas");
   let drag = null;
   canvas.addEventListener("pointerdown", (ev) => {

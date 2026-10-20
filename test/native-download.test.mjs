@@ -12,7 +12,7 @@ test("native artifact downloads admit only bounded same-origin attachments and s
   const directory = await mkdtemp(join(tmpdir(), "agent-fleet-native-policy-"));
   try {
     const app = await readFile(new URL("../desktop/AgentFleet.swift", import.meta.url), "utf8");
-    const marker = "\nlet application = NSApplication.shared\n";
+    const marker = "\n@main\nstruct AgentFleetMain";
     assert.equal(app.split(marker).length, 2, "the harness must exclude the actual application launch");
     const source = app.split(marker)[0] + String.raw`
 
@@ -68,7 +68,7 @@ print("Native download policy checks passed")
     const binary = join(directory, "native-policy");
     await writeFile(swift, source);
     const architecture = process.arch === "arm64" ? "arm64" : "x86_64";
-    await exec("xcrun", ["swiftc", "-swift-version", "5", "-target", `${architecture}-apple-macosx13.0`, "-framework", "AppKit", "-framework", "WebKit", "-module-cache-path", join(directory, "modules"), swift, "-o", binary], { timeout: 110_000, maxBuffer: 1024 * 1024 });
+    await exec("xcrun", ["swiftc", "-swift-version", "5", "-target", `${architecture}-apple-macosx13.0`, "-framework", "AppKit", "-framework", "WebKit", "-framework", "UserNotifications", "-module-cache-path", join(directory, "modules"), new URL("../desktop/AttentionNotifications.swift", import.meta.url).pathname, swift, "-o", binary], { timeout: 110_000, maxBuffer: 1024 * 1024 });
     const { stdout } = await exec(binary, [], { timeout: 5000 });
     assert.match(stdout, /Native download policy checks passed/);
   } finally {

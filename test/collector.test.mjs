@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { createCollector, snapshotHealth } from "../src/collector.mjs";
+import { attentionFeed } from "../src/notifications.mjs";
 import { createClaudeAdapter } from "../src/adapters/claude.mjs";
 import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -303,4 +304,43 @@ test("health uses observation age and carries safe process stage diagnostics", a
   const collector = createCollector(config, [], { snapshotProcesses: async () => { throw failure; } });
   const failed = await collector.collectOnce();
   assert.equal(failed.processStage, "args"); assert.deepEqual(failed.processTimings, snap.processTimings);
+});
+
+test("publication failures atomically freeze notification observations until a healthy snapshot recovers", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout", "setInterval"] });
+  let now = Date.parse("2026-10-18T10:00:00Z"), broken = false;
+  const waiting = { ...session(), status: "waiting", lastActivityAt: new Date(now).toISOString(), attention: {
+    kind: "question", evidence: "explicit", requestsComplete: true,
+    requests: [{ requestId: "a".repeat(64), kind: "question", at: new Date(now).toISOString() }],
+  } };
+  const collector = createCollector({ ...config, intervalMs: 100, adapterTimeoutMs: 1000 }, [{
+    id: "fake", label: "Fake", collect: async () => ({ nodes: broken
+      ? [{ ...waiting, lastActivityAt: 1 }, { ...session(), id: "fake:bad", lastActivityAt: 2 }]
+      : [waiting], edges: [] }),
+  }], { snapshotProcesses: emptyProcesses, now: () => now });
+  t.after(() => collector.stop());
+  await collector.start();
+  const before = collector.latest();
+  const feed = (snapshot = collector.latest()) => attentionFeed(snapshot, { instanceId: "fixture", now });
+  assert.equal(feed().requests.length, 1);
+  broken = true; now += 100; t.mock.timers.tick(100); await flush();
+  const failed = collector.latest();
+  assert.match(collector.health().collectionError, /localeCompare/);
+  assert.equal(failed.collectionError, collector.health().collectionError);
+  assert.notEqual(failed, before, "a captured healthy snapshot must not mutate after capture");
+  assert.equal(before.collectionError, null);
+  assert.equal(failed.generatedAt, before.generatedAt, "failure does not freshen observed data");
+  assert.equal(failed.processObservedAt, before.processObservedAt);
+  assert.deepEqual(failed.adapters, before.adapters);
+  assert.equal(snapshotHealth(failed, { now }).ok, false);
+  assert.equal(feed().process.current, false);
+  assert.deepEqual(feed().requests, []);
+  assert.equal(feed(before).process.current, true, "the previous captured observation remains internally consistent");
+  broken = false; now += 100; t.mock.timers.tick(100); await flush();
+  const recovered = collector.latest();
+  assert.equal(recovered.collectionError, null);
+  assert.equal(collector.health().ok, true);
+  assert.equal(feed().process.current, true);
+  assert.equal(feed().requests.length, 1);
+  assert.equal(failed.collectionError.includes("localeCompare"), true, "recovery does not mutate the failed observation");
 });

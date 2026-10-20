@@ -1,15 +1,37 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { snapshotProcesses } from "../src/procs.mjs";
+import { processStartToken, snapshotProcesses } from "../src/procs.mjs";
 
 const table = "10 1 00:01 /usr/bin/codex\n11 1 00:01 /usr/bin/claude\n";
-const args = "10 codex\n11 claude\n";
+const start = "Tue Oct 20 10:00:00 2026";
+const args = `10 ${start} codex\n11 ${start} claude\n`;
 const files = "p10\nfcwd\nn/work/fixture\nf7\nn/work/rollout.jsonl\n";
+
+test("process start tokens require canonical C-locale UTC dates", () => {
+  for (const valid of [start, "Thu Oct  1 01:02:03 2026", "Thu Feb 29 23:59:59 2024"]) {
+    assert.equal(processStartToken(` ${valid}\n`), valid);
+  }
+  for (const invalid of [
+    "Fri Feb 30 11:00:00 2026",
+    "Fri Oct 16 24:00:00 2026",
+    "Mon Oct 16 11:00:00 2026",
+    "Tue Oct 06 11:00:00 2026",
+    "Thu Feb 29 11:00:00 2026",
+    "Fri Oct 16 11:60:00 2026",
+    "Fri Oct 16 11:00:60 2026",
+  ]) {
+    assert.equal(processStartToken(invalid), null, invalid);
+  }
+});
+
 function runner({ argsError, lsofError } = {}) {
   return async (command, argv, options) => {
     assert.equal(options.timeout, 10_000, "every subprocess stays bounded");
     if (command === "ps") {
+      assert.equal(options.env.LC_ALL, "C");
+      assert.equal(options.env.TZ, "UTC");
       if (argv[0] === "-axww") return { stdout: table };
+      assert.equal(argv[argv.indexOf("-o") + 1], "pid=,lstart=,args=");
       if (argsError) throw argsError;
       return { stdout: args };
     }
@@ -28,6 +50,39 @@ test("process snapshot tolerates disappearing pids while retaining partial metad
   assert.equal(result.procs.get(10).cwd, "/work/fixture");
   assert.equal(result.openFileOwners.get("/work/rollout.jsonl"), 10);
   assert.deepEqual(result.agentPids, [10, 11]);
+  assert.equal(result.procs.get(11).procStart, start);
+});
+
+test("process start identity is captured in the existing batch and preserves space-padded UTC dates", async () => {
+  const singleDigit = "Thu Oct  1 01:02:03 2026";
+  const commands = [];
+  const run = runner();
+  const result = await snapshotProcesses({ run: (command, argv, options) => {
+    commands.push([command, argv]);
+    if (command === "ps" && argv[0] === "-ww") {
+      assert.equal(argv[argv.indexOf("-p") + 1], "10,11");
+      assert.equal(options.env.LC_ALL, "C");
+      assert.equal(options.env.TZ, "UTC");
+      return { stdout: ` 10 ${singleDigit} codex --fixture\n 11 ${start} claude --fixture\n` };
+    }
+    return run(command, argv, options);
+  } });
+  assert.equal(commands.length, 3, "no per-PID command is added");
+  assert.equal(result.procs.get(10).procStart, singleDigit);
+  assert.equal(result.procs.get(10).args, "codex --fixture");
+  assert.equal(result.procs.get(11).procStart, start);
+});
+
+test("a disappeared or malformed process row cannot reuse another process start identity", async () => {
+  const run = runner();
+  for (const stdout of [`10 ${start} codex\n`, "10 not a process start time codex\n"]) {
+    const result = await snapshotProcesses({ run: (command, argv, options) => {
+      if (command === "ps" && argv[0] === "-ww") throw Object.assign(new Error("a process exited"), { code: 1, stdout });
+      return run(command, argv, options);
+    } });
+    assert.equal(result.procs.get(11).procStart, null);
+    if (stdout.includes("not a process")) assert.equal(result.procs.get(10).procStart, null);
+  }
 });
 
 test("collector cancellation reaches every process command", async () => {

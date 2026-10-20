@@ -2,7 +2,7 @@
 
 The installer places Agent Fleet at `~/Applications/Agent Fleet.app`, with a shortcut at `~/Desktop/Agent Fleet.app`. Open the shortcut, search for **Agent Fleet** in Spotlight, or keep its running icon in the Dock. The app presents the dashboard in its own window using the system WebKit engine.
 
-After installation, both the background service and the window start **after you log in**. They do not run before login. Closing the window pauses its live view; reopening the app restores the dashboard. Command-Q quits the app. The background service continues to collect sessions and serves the dashboard at `http://127.0.0.1:7420`.
+After installation, both the background service and the window start **after you log in**. They do not run before login. Closing the window pauses its live view; reopening the app restores the dashboard. Optional input notifications continue with the window closed. Command-Q quits the app and stops its notifications. The background service continues to collect sessions and serves the dashboard at `http://127.0.0.1:7420`.
 
 ## Install or rebuild
 
@@ -12,7 +12,7 @@ Requires macOS 13+, the Xcode command-line Swift tools and Node 22+. No npm pack
 node bin/agent-fleet.mjs install-app
 ```
 
-The installer compiles the checked-in [Swift window](../desktop/AgentFleet.swift) and [icon drawing](../desktop/Icon.swift), signs the result locally and installs it for this user. Build files are temporary and the app bundle is kept outside Git. An unrelated app or Desktop item with the same name is preserved and stops installation.
+The installer compiles the checked-in [Swift window](../desktop/AgentFleet.swift), [notification monitor](../desktop/AttentionNotifications.swift) and [icon drawing](../desktop/Icon.swift), signs the result locally and installs it for this user. Build files are temporary and the app bundle is kept outside Git. An unrelated app or Desktop item with the same name is preserved and stops installation.
 
 The installer enables the existing background service, installing it if missing, and adds a separate window login item. Opening the app also asks the installed service to start. The window waits for a ready dashboard and retries interrupted page loads. Source errors remain visible once the dashboard opens.
 
@@ -34,6 +34,22 @@ The window loads only its configured local dashboard origin. Clicked web and Cla
 Files in **Results** can be previewed in the window. A document's **Download** action opens the native save dialog without leaving the dashboard. Cancel leaves the destination alone; replacing an existing file requires the system's confirmation. The app stages the transfer beside the chosen destination and publishes it only after successful completion. Failed downloads show an error and preserve any existing file. Only the configured local service's session-file download route is accepted, with an 8 MiB limit and no redirects. See [file formats and access limits](ARTIFACTS.md).
 
 Since v0.6, the window checks dashboard readiness separately from source health. A usable dashboard opens even when a source is delayed or unavailable, so its freshness and error information remains accessible.
+
+## Input notifications
+
+Notifications start off. Use **Alerts off** in the dashboard toolbar or
+**View → Input Notifications** to enable them and request macOS permission.
+Only new supported explicit questions and approvals qualify; completed replies
+and inferred prose questions do not. Notifications use generic text without
+session or question content. Click one to recheck and open its session. If the
+request is resolved or cannot be revalidated, the dashboard opens without
+selecting an unrelated session or scheduling a later jump.
+
+The monitor establishes a baseline on startup, enablement and source recovery,
+so old requests do not create catch-up alerts. It continues when the window is
+closed and stops with Command-Q. **Alerts blocked** points to the macOS
+notification settings; **Alerts updating** means usable source data is pending.
+See [notification behavior, privacy and limits](NOTIFICATIONS.md).
 
 ## Remove
 
@@ -70,3 +86,11 @@ The v0.10.0 update on 2026-10-20 reinstalls the background service for the new L
 v0.11.0 update on 2026-10-20: the background service was reinstalled and the native app rebuilt as build 12. Signature verification and the reopened Current/Graph/List state passed. Synthetic native checks verified image/text previews, readable idle Live status, saving/cancelling/replacing a document and download failure without dashboard navigation. See [v0.11 evidence and limits](VERIFICATION.md#v011-files-and-readable-live--2026-10-20). No reboot/login test was added.
 
 v0.12.0 update on 2026-10-20: the background service was reinstalled and the native app rebuilt as build 13. Signature verification passed; the reopened window showed Current, Graph/List and Project/Status controls. Synthetic browser checks verified agent-relation navigation and separation of current-branch content from archive history. See [v0.12 evidence and limits](VERIFICATION.md#v012-agent-relations-and-branch-consistency--2026-10-20). No reboot/login test was added.
+
+v0.13.0 update on 2026-10-20: the background service was reinstalled and the native
+app rebuilt as build 14. Signature verification passed; the reopened window
+showed Current, Graph/List and Alerts off. The synthetic native test mode
+verified baseline suppression, new deliveries, session navigation, monitoring
+with the window closed and simulated permission changes. Actual OS delivery was
+not exercised and the normal preference remains off. See
+[v0.13 evidence and limits](VERIFICATION.md#v013-input-notifications-and-process-identity--2026-10-20).

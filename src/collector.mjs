@@ -82,6 +82,7 @@ export function createCollector(config, adapters, { snapshotProcesses: readProce
     for (const n of nodeList) counts[n.status] = (counts[n.status] ?? 0) + 1;
     const snapshot = {
       generatedAt: new Date(at).toISOString(),
+      collectionError: null,
       collectMs: Math.max(processes.ms, ...results.map(r => r.cycleMs)),
       processMs: processes.ms, processError: processes.error, processObservedAt: processes.observedAt,
       processTimings: processes.timings ?? null, processStage: processes.stage ?? null,
@@ -96,6 +97,15 @@ export function createCollector(config, adapters, { snapshotProcesses: readProce
     return snapshot;
   }
 
+  function recordCollectionError(error) {
+    collectionError = String(error?.message ?? error);
+    // Preserve observation times and previously captured snapshots: publication
+    // failures make the next captured observation unknown, never freshly empty.
+    if (latest) latest = { ...latest, collectionError };
+    if (events.listenerCount("error")) events.emit("error", error);
+    events.emit("health", snapshotHealth(latest, { now: now(), collectionError }));
+  }
+
   function publish() {
     if (!live || stopped) return;
     try {
@@ -107,9 +117,7 @@ export function createCollector(config, adapters, { snapshotProcesses: readProce
       events.emit("health", snapshotHealth(latest, { now: now(), collectionError }));
       readyResolve?.(); readyResolve = null;
     } catch (error) {
-      collectionError = String(error?.message ?? error);
-      if (events.listenerCount("error")) events.emit("error", error);
-      events.emit("health", snapshotHealth(latest, { now: now(), collectionError }));
+      recordCollectionError(error);
       readyResolve?.(); readyResolve = null;
     }
   }
@@ -200,8 +208,7 @@ export function createCollector(config, adapters, { snapshotProcesses: readProce
     const started = now();
     try { await runRound(); }
     catch (error) {
-      collectionError = String(error?.message ?? error);
-      if (events.listenerCount("error")) events.emit("error", error);
+      recordCollectionError(error);
     } finally {
       if (!stopped && live) timer = setTimeout(tick, Math.max(0, intervalMs - (now() - started)));
     }
@@ -228,7 +235,7 @@ export function createCollector(config, adapters, { snapshotProcesses: readProce
 }
 
 /** Transport liveness is not data freshness: a healthy connection can carry old data. */
-export function snapshotHealth(snapshot, { now = Date.now(), collectionError = null } = {}) {
+export function snapshotHealth(snapshot, { now = Date.now(), collectionError = snapshot?.collectionError ?? null } = {}) {
   const intervalMs = snapshot?.intervalMs ?? 4000;
   const staleAfterMs = Math.max(3 * intervalMs, 10_000);
   const generated = Date.parse(snapshot?.generatedAt);
