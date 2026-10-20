@@ -1,6 +1,6 @@
 # Browser live views
 
-The session inspector's **Live** tab offers every supported browser page associated with that session. A gold **LIVE** badge marks reachable views in the graph; clicking it or pressing Enter opens Live directly. Multiple sessions can have browsers concurrently. If a session has several browsers/pages, **Browser view** selects the one to display. Available views remain in Live scope even if their session is parked or finished. Hidden agent/search filters still apply.
+The session inspector's **Live** tab automatically prioritizes a fresh supported browser image over recorded terminal output and agent activity. If no fresh image is available, those observations remain visible with their timestamps; see [Automatic Live](USAGE.md#automatic-live). Browser selection and setup remain available alongside the fallback. The tab offers every supported browser page associated with that session. A gold **LIVE** badge marks reachable views in the graph; clicking it or pressing Enter opens Live directly. Multiple sessions can have browsers concurrently. If a session has several browsers/pages, **Browser view** selects the one to display. Available views remain in Live scope even if their session is parked or finished. Hidden agent/search filters still apply.
 
 ## Automatic availability
 

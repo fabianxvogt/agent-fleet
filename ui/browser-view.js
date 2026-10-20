@@ -8,7 +8,7 @@ export function visibleClicks(frame, status, now = Date.now()) {
     now - click.at >= 0 && now - click.at < 6000 && frame.at >= click.at);
 }
 
-export function createBrowserView(root, { eventSource = (url) => new EventSource(url), newImage = () => new Image() } = {}) {
+export function createBrowserView(root, { eventSource = (url) => new EventSource(url), newImage = () => new Image(), onState = () => {} } = {}) {
   let id = null;
   let viewId = null;
   let source = null;
@@ -19,11 +19,12 @@ export function createBrowserView(root, { eventSource = (url) => new EventSource
   let current = null;
   let status = { state: "connecting" };
   let receivedAt = 0;
+  let decodedAt = 0;
   const labels = { connecting: "Connecting…", loading: "Page loading…", live: "Live", disconnected: "Disconnected · reconnecting…", stopped: "Browser stopped", unavailable: "No browser attached", restricted: "Live view unavailable for this context", blocked: "This page URL cannot be viewed", paused: "Paused while this tab is hidden" };
 
   function clearImage() {
     imageSequence++;
-    if (decoder) { decoder.onload = null; decoder.src = ""; decoder = null; }
+    if (decoder) { decoder.onload = decoder.onerror = null; decoder.src = ""; decoder = null; }
     current = null;
     root.querySelector(".browser-image")?.removeAttribute("src");
     const layer = root.querySelector(".browser-clicks");
@@ -43,6 +44,7 @@ export function createBrowserView(root, { eventSource = (url) => new EventSource
       ? `Read-only${status.mode === "attached" ? " · existing agent browser" : ""} · last image ${clock(current.at)}${click ? ` · click observed ${clock(click.at)}` : ""}`
       : "Read-only · terminal actions appear here";
     drawClicks();
+    onState({ id, state, hasFrame: Boolean(current), at: current?.at ?? null });
   }
   function drawClicks() {
     const clicks = visibleClicks(current, status);
@@ -101,13 +103,18 @@ export function createBrowserView(root, { eventSource = (url) => new EventSource
           ![frame.width, frame.height].every((v) => Number.isFinite(v) && v >= 1 && v <= 8192) || !Number.isFinite(frame.at) || typeof frame.data !== "string" || frame.data.length > 2 * 1024 * 1024 || !/^[a-zA-Z0-9+/=]+$/.test(frame.data)) return;
       receivedAt = Date.now();
       const sequence = ++imageSequence;
-      if (decoder) { decoder.onload = null; decoder.src = ""; }
+      if (decoder) { decoder.onload = decoder.onerror = null; decoder.src = ""; }
       const image = newImage(); decoder = image;
       image.onload = () => {
         if (expectedEpoch !== epoch || sequence !== imageSequence || frame.documentId !== status.documentId) return;
         root.querySelector(".browser-image").src = image.src;
         root.querySelector(".browser-screen").style.aspectRatio = `${frame.width} / ${frame.height}`;
+        decodedAt = Date.now();
         current = frame; renderStatus();
+      };
+      image.onerror = () => {
+        if (expectedEpoch !== epoch || sequence !== imageSequence) return;
+        clearImage(); status = { state: "disconnected" }; renderStatus(); retry();
       };
       image.src = `data:image/jpeg;base64,${frame.data}`;
     });
@@ -125,7 +132,7 @@ export function createBrowserView(root, { eventSource = (url) => new EventSource
   document.addEventListener("visibilitychange", visibility);
   const watchdog = setInterval(() => {
     if (!id || document.hidden) return;
-    if (source && Date.now() - receivedAt > 8000) {
+    if (source && (Date.now() - receivedAt > 8000 || current && Date.now() - decodedAt > 8000)) {
       disconnect(); status = { state: "disconnected" }; renderStatus(); retry();
     } else drawClicks();
   }, 1000);
@@ -135,7 +142,7 @@ export function createBrowserView(root, { eventSource = (url) => new EventSource
       if (nextId === id) return;
       disconnect(); id = nextId; viewId = null;
       root.hidden = !id;
-      if (!id) { root.innerHTML = ""; return; }
+      if (!id) { root.innerHTML = ""; onState({ id: null, state: "unavailable", hasFrame: false, at: null }); return; }
       root.innerHTML = `<div class="browser-sources" hidden><label>Browser view <select class="browser-picker" aria-label="Browser view"></select></label></div>
         <div class="browser-toolbar"><strong class="browser-state"></strong><span class="browser-location"></span></div>
         <div class="browser-screen"><img class="browser-image" alt="Live view of the selected terminal browser" draggable="false"/><div class="browser-clicks" aria-hidden="true"></div><p class="browser-placeholder"></p></div>

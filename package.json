@@ -1,6 +1,6 @@
 {
   "name": "agent-fleet",
-  "version": "0.9.1",
+  "version": "0.10.0",
   "description": "Local live dashboard of every coding-agent session on this machine and how they relate.",
   "repository": { "type": "git", "url": "https://github.com/fabianxvogt/agent-fleet.git" },
   "homepage": "https://github.com/fabianxvogt/agent-fleet#readme",

@@ -14,13 +14,14 @@ function fixture(t) {
   } };
   const sources = [];
   const images = [];
-  const view = createBrowserView(root, { eventSource(url) {
+  const states = [];
+  const view = createBrowserView(root, { onState(state) { states.push(state); }, eventSource(url) {
     const handlers = new Map();
     const source = { url, closed: false, addEventListener: (name, fn) => handlers.set(name, fn), close() { this.closed = true; }, emit(name, value) { handlers.get(name)?.({ data: JSON.stringify(value) }); } };
     sources.push(source); return source;
   }, newImage() { const image = { src: "", onload: null }; images.push(image); return image; } });
   t.after(() => { view.destroy(); globalThis.document = oldDocument; });
-  return { root, view, sources, images, el: (s) => root.querySelector(s), visibility(hidden) { document.hidden = hidden; listeners.get("visibilitychange")(); } };
+  return { root, view, sources, images, states, el: (s) => root.querySelector(s), visibility(hidden) { document.hidden = hidden; listeners.get("visibilitychange")(); } };
 }
 const live = (documentId = 1, extra = {}) => ({ state: "live", runId: "run", documentId, clicks: [], ...extra });
 const frame = (documentId = 1, extra = {}) => ({ runId: "run", documentId, data: "/9j/", at: Date.now(), width: 1280, height: 800, ...extra });
@@ -125,4 +126,35 @@ test("hidden tabs stop capture; unavailable/restricted contexts never show a fro
   f.sources[2].emit("status", { state: "restricted" });
   t.mock.timers.tick(10_000); assert.equal(f.sources.length, 3);
   assert.equal(f.el(".browser-image").src, "");
+});
+
+test("automatic Live selection is notified only after decoding and immediately on image failure or loss", (t) => {
+  const f = fixture(t);
+  f.view.select("a");
+  f.sources[0].emit("status", live());
+  f.sources[0].emit("frame", frame());
+  assert.equal(f.states.at(-1).hasFrame, false);
+  f.images.at(-1).onload();
+  assert.equal(f.states.at(-1).hasFrame, true);
+  f.sources[0].emit("frame", frame());
+  f.images.at(-1).onerror();
+  assert.equal(f.states.at(-1).hasFrame, false);
+  assert.equal(f.states.at(-1).state, "disconnected");
+  f.view.select(null);
+  assert.equal(f.states.at(-1).id, null);
+});
+
+test("repeated browser status events cannot keep an old image prioritized forever", (t) => {
+  const f = fixture(t);
+  f.view.select("a");
+  f.sources[0].emit("status", live());
+  f.sources[0].emit("frame", frame());
+  f.images.at(-1).onload();
+  for (let i = 0; i < 9; i++) {
+    f.sources[0].emit("status", live());
+    t.mock.timers.tick(1000);
+  }
+  assert.equal(f.el(".browser-image").src, "");
+  assert.equal(f.states.at(-1).hasFrame, false);
+  assert.equal(f.sources[0].closed, true);
 });

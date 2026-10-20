@@ -54,7 +54,8 @@ on the same port; an installed background service already owns the default port.
 | `src/server.mjs`, `src/details.mjs`, `src/session-content.mjs` | Local HTTP/SSE server and bounded inspector content |
 | `src/browser/` | Managed browsers, discovery and observation of supported existing browsers |
 | `src/service.mjs`, `src/desktop.mjs`, `desktop/` | macOS login service and native app |
-| `ui/` | Graph, list, filters, inspector and live view |
+| `ui/layout.js`, `ui/graph-scene.js` | Complete graph geometry and viewport projection |
+| `ui/app.js`, `ui/inspector.js`, `ui/live-view.js`, `ui/browser-view.js` | Navigation, content, automatic Live selection and browser observation |
 | `test/` | Node test runner suites with synthetic fixtures |
 
 ## Repository hygiene

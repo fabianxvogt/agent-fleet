@@ -14,7 +14,7 @@ Agent Fleet reads sessions from **Claude Code, Codex, OhMyPi, Pi and pi-agent-fl
 - **Attention and status:** separate input requests, failures and recently completed replies. Inferred questions are labeled.
 - **Source freshness:** show observation ages and source failures. Sources update independently; unavailable sources retain a labeled last-known view for up to two minutes.
 - **Session inspector:** read recent chat and tool results. An optional [agentsview](https://github.com/kenn-io/agentsview) service supplies older history.
-- **Browser Live:** observe supported agent-owned Chromium pages, switch between pages and see observed clicks. Optional terminal commands start or attach a browser.
+- **Automatic Live view:** prioritize a supported browser image, then observed terminal commands/output, then the latest agent activity. Keep the last known activity visible with its timestamp when fresh data is unavailable.
 - **Native Mac window:** install a standalone dashboard window and login startup, backed by the same local service.
 
 ## Quick start
@@ -80,9 +80,11 @@ Session collection reads local files and the process table. The dashboard binds 
 
 Automatic browser discovery requires a supported dedicated Chromium profile, an unambiguous session owner and an accessible debugging endpoint. Existing private-pipe-only browsers need another integration. Managed browsers use separate profiles and visit the URLs supplied through their terminal commands. The dashboard observes browser views; control stays with the terminal agent. See [browser setup and boundaries](docs/BROWSER.md).
 
+Terminal output comes from recorded session logs, refreshed every four seconds while selected; it is not a direct terminal screen stream. Pending, observed-running and finished commands are distinguished, and older observations are labeled.
+
 Status recognition follows each runtime's recorded events. Pi/OMP activity can still rely on file recency, and OpenCode currently has process metadata only. A completed reply can leave its session idle; it does not necessarily mean the session ended. Source freshness is shown separately from session status.
 
-For very large trees, use the compact List, project/status filters or Collapse finished. Deep-tree computation is stack-safe, but fully expanded extreme graphs can still overwhelm browser rendering. See the [measured limits](docs/VERIFICATION.md#v091-deep-tree-robustness--2026-10-20).
+Large graphs use compact status cards in the overview and render detailed cards near the visible area when zoomed in. Select an overview card to zoom to it; List, filters and Collapse finished remain useful for navigating large projects. A synthetic 3,000-level chain is verified; this is not a guarantee for every graph or device. See the [measured limits](docs/VERIFICATION.md#v010-automatic-live-and-graph-rendering--2026-10-20).
 
 ## Development and documentation
 
@@ -100,4 +102,4 @@ Tests use Node's built-in runner and synthetic fixtures. Browser integration tes
 - [Verification notes](docs/VERIFICATION.md): measured behavior, checks and remaining limits.
 - [Roadmap](ROADMAP.md): completed work and next steps.
 
-**Current version: v0.9.1.** This is an evolving local tool, classified as **INCREMENTAL / EMPIRICAL** engineering. Compatibility and performance are backed by the documented checks, not a guarantee for every agent version or host workload.
+**Current version: v0.10.0.** This is an evolving local tool, classified as **INCREMENTAL / EMPIRICAL** engineering. Compatibility and performance are backed by the documented checks, not a guarantee for every agent version or host workload.

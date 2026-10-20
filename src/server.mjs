@@ -8,7 +8,7 @@ import { watchPilot } from "./browser/pilot.mjs";
 import { createBrowserCatalog, withBrowserPresence } from "./browser/presence.mjs";
 
 const UI_DIR = fileURLToPath(new URL("../ui/", import.meta.url));
-const STATIC = { "/": "index.html", "/app.js": "app.js", "/inspector.js": "inspector.js", "/browser-view.js": "browser-view.js", "/browser-demo": "browser-demo.html", "/browser-demo.js": "browser-demo.js", "/layout.js": "layout.js", "/style.css": "style.css", "/favicon.svg": "favicon.svg" };
+const STATIC = { "/": "index.html", "/app.js": "app.js", "/inspector.js": "inspector.js", "/browser-view.js": "browser-view.js", "/live-view.js": "live-view.js", "/browser-demo": "browser-demo.html", "/browser-demo.js": "browser-demo.js", "/layout.js": "layout.js", "/graph-scene.js": "graph-scene.js", "/style.css": "style.css", "/favicon.svg": "favicon.svg" };
 const TYPES = { ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8", ".svg": "image/svg+xml" };
 
 export async function serve(config, adapters) {

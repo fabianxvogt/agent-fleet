@@ -11,9 +11,9 @@ Start with the [project README](../README.md) for requirements and a quick start
 - [Verification and limitations](VERIFICATION.md): dated measurements, regression coverage and remaining validation.
 - [Roadmap](../ROADMAP.md): Now / Next / Later / Done.
 
-The current release is **v0.9.1** (`INCREMENTAL / EMPIRICAL`). It includes independent
-source updates, observation-based freshness, graph folding, compact lists,
-project/status filters and stack-safe deep-tree computation. Evidence is local
-and bounded; fully expanded extreme graphs still have browser rendering limits.
-Sustained everyday workloads, additional browser runtimes and a real logout/login
-cycle still need validation.
+The current release is **v0.10.0** (`INCREMENTAL / EMPIRICAL`). It adds automatic
+Live selection between browser, terminal and agent activity, plus compact graph
+overviews and viewport-based detail rendering. Source freshness, graph folding,
+lists and filters remain available. Evidence is synthetic and bounded; everyday
+runtime coverage, sustained workloads and a real logout/login cycle still need
+validation. Artifact previews are next.

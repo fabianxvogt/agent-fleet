@@ -28,7 +28,7 @@ test("Codex handles function/custom tools, deduplicates event copies and ignores
     codex({ type: "reasoning", summary: [{ text: "private reasoning" }] }),
     codex({ type: "message", role: "assistant", channel: "analysis", content: [{ type: "output_text", text: "private analysis" }] }),
     codex({ type: "function_call", name: "exec_command", call_id: "a", arguments: '{"cmd":"npm test"}' }),
-    codex({ type: "function_call_output", call_id: "a", output: "Process exited with code 1\nFailed test" }),
+    codex({ type: "function_call_output", call_id: "a", output: "Chunk ID: failed\nWall time: 0.1 seconds\nProcess exited with code 1\nFinal output:\nFailed test" }),
     codex({ type: "custom_tool_call", name: "apply_patch", call_id: "b", input: "A safe patch" }),
     codex({ type: "custom_tool_call_output", call_id: "b", output: "Applied" }),
     codex({ type: "message", role: "assistant", phase: "final", content: [{ type: "output_text", text: "Fixed." }] }),
@@ -105,4 +105,151 @@ test("streamed messages keep stable identities while their text grows", () => {
   const a = archiveContent([{ ordinal: 1, role: "assistant", content: "First" }]);
   const b = archiveContent([{ ordinal: 1, role: "assistant", content: "First and second" }]);
   assert.equal(a[0].id, b[0].id);
+});
+
+test("terminal evidence tracks Codex execution and continuations without merging tool entries", () => {
+  const run = (sessionId, output = "") => ({ output, session_id: sessionId, wall_time_seconds: 1 });
+  const records = [
+    codex({ type: "function_call", name: "functions.exec_command", call_id: "exec", arguments: JSON.stringify({ cmd: "npm test", workdir: "/demo/project" }) }),
+    codex({ type: "function_call_output", call_id: "exec", output: run(42, "Starting tests") }),
+    codex({ type: "function_call", name: "functions.write_stdin", call_id: "poll", arguments: '{"session_id":42,"chars":""}' }),
+    codex({ type: "function_call_output", call_id: "poll", output: JSON.stringify(run(42, "12 tests passed")) }),
+    codex({ type: "function_call", name: "write_stdin", call_id: "end", arguments: '{"session_id":42}' }),
+    codex({ type: "function_call_output", call_id: "end", output: { output: "13 tests passed", exit_code: 0, wall_time_seconds: 0.1 } }),
+  ];
+  const pending = localContent(records.slice(0, 1), "codex").entries[0];
+  assert.deepEqual(pending.terminal, { command: "npm test", cwd: "/demo/project", state: "pending", exitCode: null, sessionId: null });
+  const entries = localContent(records, "codex").entries;
+  assert.equal(entries.length, 3);
+  assert.deepEqual(entries.map((e) => e.id), ["tool:exec", "tool:poll", "tool:end"]);
+  assert.deepEqual(entries.map((e) => e.terminal.state), ["running", "running", "exited"]);
+  for (const entry of entries) {
+    assert.equal(entry.terminal.command, "npm test");
+    assert.equal(entry.terminal.cwd, "/demo/project");
+    assert.equal(entry.terminal.sessionId, "42");
+    assert.equal(entry.resultAt, "2026-10-16T12:00:00.000Z");
+  }
+  assert.equal(entries[2].terminal.exitCode, 0);
+  assert.match(entries[1].text, /12 tests passed/);
+  assert.equal(localContent(records.slice(0, 3), "codex").entries[1].terminal.state, "pending");
+});
+
+test("terminal evidence accepts runner envelopes without treating stdout phrases as execution state", () => {
+  const outputs = [
+    "Chunk ID: abcd12\nWall time: 1.0000 seconds\nProcess running with session ID 77\nOriginal token count: 4\nOutput:\nWorking",
+    "Chunk ID: aabbcc\nWall time: 0.003 seconds\nProcess exited with code 7\nFinal output:\nFailed",
+    "Tests say: Process running with session ID 77",
+    "Process exited with code 9\nThis is arbitrary stdout",
+    "Chunk ID: aabbcc\nWall time: 0.003 seconds\nProcess exited with code 0\nFinal output:\nProcess running with session ID 99",
+    '{"output":"still a printed object","session_id":12}',
+    { output: "not validated", session_id: 14, wall_time_seconds: "bad" },
+  ];
+  const entries = localContent(outputs.flatMap((output, index) => [
+    codex({ type: "function_call", name: "exec_command", call_id: `t${index}`, arguments: '{"cmd":"run"}' }),
+    codex({ type: "function_call_output", call_id: `t${index}`, output }),
+  ]), "codex").entries;
+  assert.deepEqual(entries.map((e) => e.terminal.state), ["running", "exited", "unknown", "unknown", "exited", "unknown", "unknown"]);
+  assert.equal(entries[0].terminal.sessionId, "77");
+  assert.equal(entries[1].terminal.exitCode, 7);
+  assert.equal(entries[1].status, "failed");
+  assert.equal(entries[4].terminal.sessionId, null);
+  assert.equal(entries[4].terminal.exitCode, 0);
+  assert.equal(entries[3].status, "completed", "a quoted exit phrase is not proof of failure");
+  assert.equal(entries[4].status, "completed", "stdout cannot contradict the runner's exit code");
+});
+
+test("Claude and Pi shell results complete synchronous commands and redact terminal fields", () => {
+  const claude = localContent([
+    { type: "assistant", timestamp: T, message: { content: [{ type: "tool_use", id: "bash", name: "Bash", input: { command: 'API_KEY="test-sensitive-value" printf "<script>safe text</script>"', cwd: "/demo" } }] } },
+    { type: "user", timestamp: T, message: { content: [{ type: "tool_result", tool_use_id: "bash", content: "Process running with session ID 999\npassword=output-secret", is_error: true }] } },
+  ], "claude").entries[0];
+  assert.equal(claude.terminal.state, "exited");
+  assert.equal(claude.terminal.exitCode, null);
+  assert.equal(claude.terminal.sessionId, null);
+  assert.equal(claude.status, "failed");
+  assert.match(claude.terminal.command, /<script>safe text<\/script>/);
+  assert.ok(!JSON.stringify(claude).includes("test-sensitive-value"));
+  assert.ok(!JSON.stringify(claude).includes("output-secret"));
+  const pi = localContent([
+    { type: "message", timestamp: T, message: { role: "assistant", content: [{ type: "toolCall", id: "p", name: "bash", arguments: { command: "pwd", cwd: "/demo/pi" } }] } },
+    { type: "message", timestamp: T, message: { role: "toolResult", toolCallId: "p", content: [{ type: "text", text: "/demo/pi" }] } },
+  ], "pi").entries[0];
+  assert.deepEqual(pi.terminal, { command: "pwd", cwd: "/demo/pi", state: "exited", exitCode: null, sessionId: null });
+});
+
+test("terminal evidence uses exact known input fields and handles orphan continuations safely", () => {
+  const entries = localContent([
+    codex({ type: "function_call", name: "mcp__runner__shell_command", call_id: "shell", arguments: '{"command":"pwd","workdir":"/demo"}' }),
+    codex({ type: "function_call", name: "functions.exec", call_id: "orchestration", arguments: 'await tools.exec_command({cmd:"pwd"})' }),
+    codex({ type: "function_call", name: "not_exec_command", call_id: "unknown", arguments: '{"cmd":"pwd"}' }),
+    codex({ type: "function_call", name: "Bash", call_id: "raw", arguments: "pwd" }),
+    codex({ type: "function_call", name: "write_stdin", call_id: "orphan", arguments: '{"session_id":37,"command":"do not invent","cwd":"/wrong"}' }),
+    codex({ type: "function_call_output", call_id: "orphan", output: { output: "finished", exit_code: 2, wall_time_seconds: 0 } }),
+    codex({ type: "function_call_output", call_id: "without-call", output: { output: "finished", session_id: 31, wall_time_seconds: 1 } }),
+  ], "codex").entries;
+  assert.deepEqual(entries[0].terminal, { command: "pwd", cwd: "/demo", state: "pending", exitCode: null, sessionId: null });
+  assert.equal(entries[1].terminal, undefined);
+  assert.equal(entries[2].terminal, undefined);
+  assert.equal(entries[3].terminal.command, null);
+  assert.deepEqual(entries[4].terminal, { command: null, cwd: null, state: "exited", exitCode: 2, sessionId: "37" });
+  assert.equal(entries[4].status, "failed");
+  assert.equal(entries[5].terminal, undefined);
+});
+
+test("archive terminal evidence preserves unavailable result times and only knows explicit completion", () => {
+  const entries = archiveContent([
+    { ordinal: 1, role: "assistant", tool_calls: [{ tool_use_id: "a", tool_name: "Bash", input_json: '{"command":"pwd"}', result_content: "done" }] },
+    { ordinal: 2, role: "assistant", timestamp: T, tool_calls: [{ tool_use_id: "b", tool_name: "exec_command", input_json: '{"cmd":"run"}', result_content: "Chunk ID: abc\nWall time: 0.1 seconds\nProcess exited with code 4\nFinal output:\nFailure" }] },
+    { ordinal: 3, role: "assistant", tool_calls: [{ tool_use_id: "c", tool_name: "exec_command", input_json: '{"cmd":"pending"}' }] },
+  ]);
+  assert.equal(entries[0].at, null);
+  assert.equal(entries[0].resultAt, null);
+  assert.equal(entries[0].terminal.state, "exited");
+  assert.equal(entries[1].resultAt, null);
+  assert.equal(entries[1].terminal.exitCode, 4);
+  assert.equal(entries[1].status, "failed");
+  assert.equal(entries[2].terminal.state, "pending");
+  assert.ok(!entries[2].resultAt);
+});
+
+test("terminal evidence remains bounded and background Bash returns do not imply command completion", () => {
+  const records = [];
+  for (let id = 1; id <= 129; id++) {
+    records.push(
+      codex({ type: "function_call", name: "exec_command", call_id: `c${id}`, arguments: JSON.stringify({ cmd: `command ${id}` }) }),
+      codex({ type: "function_call_output", call_id: `c${id}`, output: { output: "", session_id: id, wall_time_seconds: 1 } }),
+    );
+  }
+  records.push(codex({ type: "function_call", name: "write_stdin", call_id: "old", arguments: '{"session_id":1}' }));
+  records.push(codex({ type: "function_call", name: "write_stdin", call_id: "recent", arguments: '{"session_id":129}' }));
+  const entries = localContent(records, "codex").entries;
+  assert.equal(entries.length, 120);
+  assert.equal(entries.at(-2).terminal.command, null);
+  assert.equal(entries.at(-1).terminal.command, "command 129");
+  const background = localContent([
+    codex({ type: "function_call", name: "Bash", call_id: "background", arguments: JSON.stringify({ command: "x".repeat(9000), run_in_background: true }) }),
+    codex({ type: "function_call_output", call_id: "background", output: "Background task started" }),
+  ], "codex").entries[0];
+  assert.equal(background.terminal.state, "unknown");
+  assert.ok(background.terminal.command.length < 8100);
+});
+
+test("terminal credential redaction handles quoted values and JSON-escaped shell commands", () => {
+  for (const input of [
+    'PASSWORD="synthetic secret with spaces"',
+    'PASSWORD="synthetic secret with spaces',
+    "PASSWORD='synthetic secret with spaces'",
+    String.raw`PASSWORD=\"synthetic secret with spaces`,
+    'PASSWORD="synthetic \\"secret with spaces"',
+    JSON.stringify({ command: 'API_KEY="synthetic secret with spaces" run-tests' }),
+    JSON.stringify({ command: 'API_KEY="synthetic \\"secret with spaces" run-tests' }),
+    JSON.stringify({ command: "PASSWORD='synthetic secret with spaces' run-tests" }),
+  ]) {
+    const redacted = safeText(input);
+    assert.ok(!redacted.includes("synthetic"));
+    assert.ok(!redacted.includes("with spaces"));
+    assert.match(redacted, /\[redacted\]/);
+  }
+  const command = 'API_KEY="synthetic secret" run-tests';
+  assert.equal(JSON.parse(safeText({ command })).command, 'API_KEY="[redacted]" run-tests');
 });

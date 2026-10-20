@@ -77,7 +77,7 @@
         <div class="view-summary"><span id="filter-summary" role="status"></span><span id="list-order" hidden>Latest activity first</span></div>
       <div class="canvas" id="canvas">
         <div id="data-notice" class="data-notice" hidden></div>
-        <svg id="graph" xmlns="http://www.w3.org/2000/svg">
+        <svg id="graph" xmlns="http://www.w3.org/2000/svg" aria-label="Session graph. Select an overview card to zoom in; use List to browse all sessions.">
           <defs>
             <marker id="arrow-message" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" /></marker>
             <marker id="arrow-report" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" /></marker>
@@ -105,7 +105,7 @@
         <div id="panel-overview"></div>
         <p id="panel-data-notice" class="attention-note stale-note" hidden>Showing last known activity. Waiting for a fresh update.</p>
         <div id="session-content"></div>
-        <section id="session-live" aria-label="Live browser" hidden></section>
+        <section id="session-live" aria-label="Live activity" hidden></section>
         <details class="session-metadata"><summary>Session details &amp; relations</summary><div id="panel-body"></div></details>
       </aside>
     </div>

@@ -1,7 +1,21 @@
 import assert from "node:assert/strict";
 import { setImmediate } from "node:timers/promises";
 import { test } from "node:test";
-import { createInspector } from "../ui/inspector.js";
+import { createInspector, mergeContent } from "../ui/inspector.js";
+import { liveActivity } from "../ui/live-view.js";
+
+test("tail-only returns invalidate inherited execution state while preserving the command", () => {
+  const at = new Date().toISOString();
+  for (const state of ["pending", "running"]) {
+    const call = { id: "call", kind: "tool", name: "exec_command", text: null, at,
+      terminal: { command: "npm test", state, sessionId: "123", exitCode: null } };
+    const result = { id: "call", kind: "tool", name: "Tool result", text: "Tests passed", at, resultAt: at, status: "completed" };
+    const entries = mergeContent([call], [result]);
+    assert.equal(entries[0].terminal.command, "npm test");
+    assert.equal(entries[0].terminal.state, "unknown");
+    assert.equal(liveActivity({ entries, localState: "available", session: { status: "working" } }).label, "Last observed terminal activity");
+  }
+});
 
 const response = (id, text, extra = {}) => new Response(JSON.stringify({
   id, local: { state: "available", entries: [{ id: text, kind: "message", role: "assistant", text, final: true, at: "2026-10-16T12:00:00Z" }], activity: { label: "Posted a response", detail: text } },
@@ -28,6 +42,82 @@ test("graph shortcut opens Live and later content refreshes preserve the selecte
   r.click({ contentTab: "chat" }); assert.equal(selected.at(-1), null);
   inspector.showTab("live"); inspector.select(null); assert.equal(selected.at(-1), null);
 });
+
+test("Live receives selected-session evidence and updates status before another transcript read", async (t) => {
+  const r = root(), updates = [];
+  const inspector = createInspector(r, { fetcher: async () => response("a", "RECORDED REPLY"), browserView: { select: (id, context) => updates.push({ id, context }), destroy() {} } });
+  t.after(() => inspector.destroy());
+  inspector.select("a", "Working", { title: "Synthetic session", status: "working" });
+  inspector.showTab("live");
+  assert.equal(updates.at(-1).context.session.title, "Synthetic session");
+  await setImmediate();
+  assert.equal(updates.at(-1).id, "a");
+  assert.equal(updates.at(-1).context.entries.at(-1).text, "RECORDED REPLY");
+  inspector.select("a", "Done", { title: "Synthetic session", status: "done" });
+  assert.equal(updates.at(-1).context.session.status, "done");
+});
+
+test("restricted refreshes revoke previously retained local and archive evidence", async (t) => {
+  const r = root(), updates = [];
+  let restricted = false;
+  const inspector = createInspector(r, { fetcher: async () => restricted
+    ? response("a", "unused", { local: { state: "restricted", entries: [], activity: null }, archive: { state: "restricted", entries: [], hasMore: false } })
+    : response("a", "PREVIOUS CONTENT"),
+  browserView: { select: (id, context) => updates.push({ id, context }), destroy() {} } });
+  t.after(() => inspector.destroy());
+  inspector.select("a"); inspector.showTab("live");
+  await setImmediate();
+  restricted = true;
+  r.click({}, "data-inspector-refresh");
+  await setImmediate();
+  assert.equal(updates.at(-1).context.entries.length, 0);
+  assert.equal(updates.at(-1).context.localState, "restricted");
+  assert.doesNotMatch(r.innerHTML, /PREVIOUS CONTENT/);
+});
+
+for (const older of [false, true]) for (const revoked of ["restricted", "mismatch"]) {
+  test(`${older ? "pagination" : "polling"} revokes ${revoked} evidence before rendering`, async (t) => {
+    t.mock.timers.enable({ apis: ["setInterval"] });
+    const previousDocument = globalThis.document;
+    globalThis.document = { hidden: false };
+    t.after(() => { globalThis.document = previousDocument; });
+    const r = root(), updates = [];
+    let changed = false;
+    const inspector = createInspector(r, {
+      fetcher: async () => changed
+        ? response("a", "LOCAL RESPONSE", {
+          ...(revoked === "restricted" ? { local: { state: "restricted", entries: [], activity: null } } : older ? { local: null } : {}),
+          archive: { state: revoked, entries: [], hasMore: false },
+        })
+        : response("a", "LOCAL RESPONSE", {
+          archive: { state: "available", entries: [{ id: "archive-message:5", kind: "message", role: "assistant", text: "ARCHIVED RESPONSE", ordinal: 5 }], hasMore: true, before: 4, revision: "rev" },
+        }),
+      browserView: { select: (id, context) => updates.push({ id, context }), destroy() {} },
+    });
+    t.after(() => inspector.destroy());
+    inspector.select("a"); inspector.showTab("live");
+    await setImmediate();
+    assert.match(r.innerHTML, /ARCHIVED RESPONSE/);
+    changed = true;
+    if (older) r.click({}, "data-load-history");
+    else t.mock.timers.tick(4000);
+    await setImmediate();
+    const context = updates.at(-1).context;
+    assert.doesNotMatch(r.innerHTML, /ARCHIVED RESPONSE/);
+    assert.doesNotMatch(r.innerHTML, /data-load-history/);
+    assert.equal(context.archiveState, revoked);
+    assert.ok(!context.entries.some((entry) => entry.text === "ARCHIVED RESPONSE"));
+    if (revoked === "restricted") {
+      assert.doesNotMatch(r.innerHTML, /LOCAL RESPONSE/);
+      assert.equal(context.localState, "restricted");
+      assert.equal(context.activity, null);
+      assert.deepEqual(context.entries, []);
+    } else {
+      assert.match(r.innerHTML, /LOCAL RESPONSE/);
+      assert.ok(context.entries.some((entry) => entry.text === "LOCAL RESPONSE"));
+    }
+  });
+}
 
 test("late responses from a previous selection cannot replace the current session", async (t) => {
   const r = root();

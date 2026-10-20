@@ -3,6 +3,7 @@ import { readFile } from "node:fs/promises";
 import { test } from "node:test";
 import vm from "node:vm";
 import * as graphLayout from "../ui/layout.js";
+import * as graphScene from "../ui/graph-scene.js";
 
 const source = (await readFile(new URL("../ui/app.js", import.meta.url), "utf8")).replace(/^import .*;\n/gm, "");
 const NOW = Date.parse("2026-10-18T12:00:00Z");
@@ -17,7 +18,7 @@ const snapshot = (count = 8, chain = false) => ({
 
 // Run the production event handlers with synthetic data and only the DOM surface they use.
 // Browser verification covers actual SVG rendering and element geometry separately.
-function app(snap = snapshot(), overflow = 0, preferences = {}) {
+function app(snap = snapshot(), preferences = {}) {
   const elements = new Map();
   const writes = new Map();
   const storage = new Map(Object.entries(preferences));
@@ -41,10 +42,7 @@ function app(snap = snapshot(), overflow = 0, preferences = {}) {
       classList: { add() {}, remove() {}, toggle() {} },
       addEventListener(type, fn) { this.handlers[type] = fn; },
       querySelectorAll: () => [],
-      getBBox() {
-        const L = vm.runInContext("state.lastLayout", context);
-        return { x: -overflow, y: 0, width: L.width + overflow * 2, height: L.height };
-      },
+      getBBox() { throw new Error("Graph rendering must not measure the entire SVG"); },
       setAttribute(name, value) { this[name] = value; },
       getAttribute(name) { return this[name]; },
       setPointerCapture() {},
@@ -60,12 +58,12 @@ function app(snap = snapshot(), overflow = 0, preferences = {}) {
     return button;
   });
   const context = vm.createContext({
-    ...graphLayout, URL, console,
+    ...graphLayout, ...graphScene, URL, console,
     layout(...args) { layoutCalls++; return graphLayout.layout(...args); },
     collapseCompleted(...args) { projectionCalls++; return graphLayout.collapseCompleted(...args); },
     Date: class extends Date { static now() { return now; } },
     createInspector: () => ({ select(...args) { inspectorCalls++; selections.push(args); }, showTab(tab) { openedTabs.push(tab); } }),
-    createBrowserView: () => ({ select() {} }),
+    createLiveView: () => ({ select() {} }),
     document: { getElementById: get, querySelectorAll: (selector) => selector === "[data-scope]" ? scopes : [], addEventListener() {} },
     window: { addEventListener() {} },
     localStorage: { getItem: (key) => storage.get(key) ?? null, setItem: (key, value) => storage.set(key, value) },
@@ -98,7 +96,8 @@ function app(snap = snapshot(), overflow = 0, preferences = {}) {
     projectionCalls: () => projectionCalls,
     inspectorCalls: () => inspectorCalls,
     view: () => vm.runInContext("({ ...state.view })", context),
-    bounds: () => get("viewport").getBBox(),
+    bounds: () => vm.runInContext("({ ...state.graphBounds })", context),
+    focus(element) { context.document.activeElement = element; },
     size: () => get("canvas").getBoundingClientRect(),
     fire: (type, extra = {}) => get("canvas").handlers[type]({
       preventDefault() {}, target: { closest: () => null }, clientX: 500, clientY: 350, deltaX: 0, deltaY: 0, ...extra,
@@ -195,10 +194,15 @@ test("resizing and live graph shrinkage recalculate navigation boundaries", () =
   assertBounded(a);
 });
 
-test("bounds include relation curves outside lane rectangles and negative origins", () => {
-  const a = app(snapshot(8, true), 150);
+test("bounds include actual relation curves outside lane rectangles", () => {
+  const snap = snapshot(2);
+  for (const node of snap.nodes) node.project = "Same lane";
+  snap.edges = [{ from: "test:0", to: "test:1", kind: "message", count: 3 }];
+  const a = app(snap);
+  assert.ok(a.bounds().width > graphLayout.CARD_W + graphLayout.LANE_PAD * 2, "same-column relation and badge extend beyond the lane");
   assert.ok(a.bounds().width * a.view().k <= a.size().width - 60 + 1e-6, "Fit must include every drawn curve");
   assertBounded(a);
+  a.resize(500, 760);
   for (let i = 0; i < 10; i++) a.get("zoom-in").onclick();
   for (const delta of [-1e6, 1e6]) {
     a.fire("wheel", { deltaX: delta, deltaY: delta });
@@ -307,7 +311,7 @@ test("switching graph and list preserves the selected session and persists the c
   assert.equal(a.get("graph").hidden, true);
   assert.equal(a.get("session-list").hidden, false);
   assert.equal(a.get("view-list").getAttribute("aria-pressed"), "true");
-  const reopened = app(snap, 0, a.preferences());
+  const reopened = app(snap, a.preferences());
   assert.equal(reopened.state().display, "list");
   assert.equal(reopened.layoutCalls(), 0, "a saved list preference must skip the initial graph layout");
   assert.equal(reopened.projectionCalls(), 0, "a saved list preference must skip the initial graph projection");
@@ -452,7 +456,9 @@ test("list orders activity, distinguishes uncertain states and opens the existin
   assert.match(a.get("stats").innerHTML, /<b>1<\/b>Last known/);
   clickSession(a, "cached", { live: true });
   assert.equal(a.state().selected, "cached");
-  assert.deepEqual(a.selections.at(-1), ["cached", "Last known: Working"]);
+  assert.deepEqual(JSON.parse(JSON.stringify(a.selections.at(-1))), ["cached", "Last known: Working", {
+    title: "Cached worker", status: "working", lastActivityAt: snap.nodes[0].lastActivityAt, stale: true,
+  }]);
   assert.equal(a.openedTabs.at(-1), "live");
   clickSession(a, "question");
   assert.equal(a.state().selected, "question");
@@ -719,4 +725,153 @@ test("source age marks only affected rows and edges without relayout while healt
   assert.equal(fresh.classes.get("data-stale"), false);
   assert.equal(edge.classes.get("data-stale"), true);
   assert.equal(a.layoutCalls(), layouts);
+});
+
+test("deep overview preserves sessions without rendering unreadable card text, then zoom draws nearby details", () => {
+  const a = app(snapshot(3000, true));
+  assert.equal(rowIds(a, "viewport").length, 3000, "Fit must retain every session in the overview");
+  assert.equal((a.get("viewport").innerHTML.match(/class="title"/g) ?? []).length, 0, "subpixel cards must not carry full text rendering");
+  const layouts = a.layoutCalls(), projections = a.projectionCalls(), inspector = a.inspectorCalls();
+  for (let i = 0; i < 36; i++) a.get("zoom-in").onclick();
+  assert.ok(rowIds(a, "viewport").length < 30, "readable zoom must draw only nearby cards");
+  assert.ok((a.get("viewport").innerHTML.match(/class="title"/g) ?? []).length > 0, "nearby cards regain readable details");
+  assert.equal(a.layoutCalls(), layouts);
+  assert.equal(a.projectionCalls(), projections);
+  assert.equal(a.inspectorCalls(), inspector);
+  assert.equal(a.state().visibleIds.length, 3000, "drawing fewer cards must not change filter membership");
+  assertBounded(a);
+});
+
+test("offscreen selection recenters a culled session and List switches release hidden graph content", () => {
+  const a = app(snapshot(3000, true));
+  for (let i = 0; i < 36; i++) a.get("zoom-in").onclick();
+  assert.ok(!rowIds(a, "viewport").includes("test:2999"));
+  clickSession(a, "test:2999", { element: "waiting" });
+  assert.equal(a.state().selected, "test:2999");
+  assert.ok(rowIds(a, "viewport").includes("test:2999"));
+  assert.ok(rowIds(a, "viewport").length < 30);
+  a.get("view-list").onclick();
+  assert.equal(a.get("viewport").innerHTML, "");
+  assert.equal(rowIds(a).length, 3000);
+  a.get("view-graph").onclick();
+  assert.equal(a.get("session-rows").innerHTML, "");
+  assert.equal(a.state().selected, "test:2999");
+});
+
+test("overview cards support keyboard selection and reveal readable detail", () => {
+  const a = app(snapshot(3000, true));
+  let prevented = false;
+  const target = { closest: (selector) => selector === ".node" ? { dataset: { id: "test:0" } } : null };
+  a.get("viewport").handlers.keydown({ key: "Enter", target, preventDefault() { prevented = true; } });
+  assert.equal(prevented, true);
+  assert.equal(a.state().selected, "test:0");
+  assert.ok(a.view().k >= 0.8);
+  assert.ok(rowIds(a, "viewport").includes("test:0"));
+  assert.match(a.get("viewport").innerHTML, /class="title"/);
+});
+
+test("panning inside an unchanged projection preserves graph DOM and inspector", () => {
+  const a = app(snapshot(3000, true));
+  clickSession(a, "test:1500", { element: "waiting" });
+  const writes = a.writes("viewport");
+  const layouts = a.layoutCalls();
+  const inspector = a.inspectorCalls();
+  a.fire("wheel", { deltaX: 1 });
+  assert.equal(a.writes("viewport"), writes);
+  assert.equal(a.layoutCalls(), layouts);
+  assert.equal(a.inspectorCalls(), inspector);
+});
+
+test("focused LIVE and fold controls stay detailed and retain keyboard focus after culling or refresh", () => {
+  for (const kind of ["live", "fold"]) {
+    const snap = snapshot(60, true);
+    snap.nodes[0].liveView = { available: true };
+    for (const node of snap.nodes.slice(1)) {
+      node.status = "done";
+      node.lastActivityAt = snap.generatedAt;
+    }
+    const a = app(snap);
+    a.get("scope-all").onclick();
+    clickSession(a, "test:0", { element: "waiting" });
+    let restored = 0;
+    const node = {
+      dataset: { id: "test:0" }, classList: { add() {}, remove() {}, toggle() {} }, setAttribute() {},
+      closest: (selector) => selector === ".node" ? node : null,
+      querySelector: (selector) => selector === (kind === "live" ? "[data-live-view]" : "[data-collapse]") ? control : null,
+      focus() { a.focus(node); },
+    };
+    const control = {
+      closest: (selector) => selector === ".node" ? node : selector === (kind === "live" ? "[data-live-view]" : "[data-collapse]") ? control : null,
+      focus() { restored++; a.focus(control); },
+    };
+    a.get("viewport").querySelectorAll = (selector) => selector === ".node" && rowIds(a, "viewport").includes("test:0") ? [node] : [];
+    a.focus(control);
+    a.fire("wheel", { deltaX: 1e6 });
+    assert.ok(rowIds(a, "viewport").includes("test:0"), "focused control retains its offscreen card");
+    assert.ok(restored > 0);
+    a.get("zoom-fit").onclick();
+    assert.ok(a.view().k < 0.45);
+    assert.equal((a.get("viewport").innerHTML.match(/class="title"/g) ?? []).length, 1, "focused overview card alone keeps its readable controls");
+    assert.match(a.get("viewport").innerHTML, kind === "live" ? /class="live-badge"/ : /data-collapse="test:0"/);
+    const before = restored;
+    a.send(snap);
+    assert.ok(restored > before, "snapshot redraw restores the same control");
+  }
+});
+
+test("source-stale node and edge decoration survives a view redraw without another health update", () => {
+  const snap = snapshot(3000, true);
+  snap.adapters = [{ id: "claude", label: "Claude", nodes: 3000, ms: 1, observedAt: snap.generatedAt }];
+  const a = app(snap);
+  a.health({ ...snap, adapters: [{ ...snap.adapters[0], stale: true, error: "synthetic failure" }] });
+  const layouts = a.layoutCalls();
+  clickSession(a, "test:1500", { element: "waiting" });
+  assert.match(a.get("viewport").innerHTML, /class="node s-working data-stale/);
+  assert.match(a.get("viewport").innerHTML, /class="edge e-spawn[^"]*data-stale/);
+  assert.equal(a.layoutCalls(), layouts);
+});
+
+test("pointer focus preserves its hit target until click at detailed and overview scales", () => {
+  for (const count of [3, 80]) {
+    const a = app(snapshot(count, true));
+    const node = { dataset: { id: "test:0" }, closest: (selector) => selector === ".node" ? node : null };
+    const writes = a.writes("viewport");
+    a.fire("pointerdown", { target: node });
+    a.focus(node);
+    a.get("viewport").handlers.focusin?.({ target: node });
+    assert.equal(a.writes("viewport"), writes, "focus during pointerdown must not replace the future click target");
+    a.fire("pointerup", { target: node });
+    a.get("viewport").handlers.click({ target: node });
+    assert.equal(a.state().selected, "test:0");
+    assert.ok(a.view().k >= 0.8);
+  }
+});
+
+test("focusing a detailed card does not invalidate an otherwise unchanged view projection", () => {
+  const a = app(snapshot(3000, true));
+  clickSession(a, "test:1500", { element: "waiting" });
+  const node = { dataset: { id: "test:1500" }, closest: (selector) => selector === ".node" ? node : null };
+  const writes = a.writes("viewport");
+  a.focus(node);
+  a.fire("wheel", { deltaX: 1 });
+  assert.equal(a.writes("viewport"), writes, "focus only changes compact detail; a detailed card is already fully rendered");
+});
+
+test("compact source freshness recovers through health decoration after a stale projection redraw", () => {
+  const snap = snapshot(80, true);
+  snap.adapters = [{ id: "claude", label: "Claude", nodes: 80, ms: 1, observedAt: snap.generatedAt }];
+  const a = app(snap);
+  a.health({ ...snap, adapters: [{ ...snap.adapters[0], stale: true, error: "synthetic failure" }] });
+  a.get("zoom-fit").onclick();
+  const opening = a.get("viewport").innerHTML.match(/<g class="node[^>]*data-id="test:1"[^>]*>/)?.[0];
+  assert.match(opening, /data-stale/);
+  assert.match(opening, /compact/);
+  assert.match(opening, /--node-status:var\(--s-working\)/, "base color must retain lifecycle status underneath the transient stale class");
+  const classes = new Map([["data-stale", true]]);
+  const element = { dataset: { id: "test:1" }, classList: { toggle(name, value) { classes.set(name, value); } } };
+  a.get("canvas").querySelectorAll = () => [element];
+  const writes = a.writes("viewport");
+  a.health(snap);
+  assert.equal(classes.get("data-stale"), false);
+  assert.equal(a.writes("viewport"), writes, "health recovery must restore color without replacing the graph");
 });

@@ -1,7 +1,7 @@
 # Session artifact previews
 
-Status: **planned for v0.10; not implemented yet**. This is the next feature
-after the measured deep-tree robustness fixes and large-graph rendering work.
+Status: **planned for v0.11; not implemented yet**. This is the next feature
+after automatic Live activity and the measured graph-rendering improvements.
 The current Results tab displays text and tool replies only.
 
 ## User experience

@@ -9,6 +9,11 @@ export function mergeContent(history, recent) {
     if (i >= 0) {
       const previous = entries[i];
       entries[i] = { ...previous, ...e, id: previous.id, origin: "local", text: e.text ?? previous.text, name: e.name === "Tool result" ? previous.name ?? e.name : e.name, input: e.input || previous.input, status: e.status === "observed" && previous.status === "completed" ? "completed" : e.status };
+      // A tail-only return has no validated runner metadata. Retain the command,
+      // but never carry an earlier pending/running observation into its result.
+      if (e.kind === "tool" && e.text != null && !e.terminal && previous.terminal) {
+        entries[i].terminal = { ...previous.terminal, state: "unknown", exitCode: null };
+      }
       matched.add(i);
     } else entries.push({ ...e, origin: "local" });
   }
@@ -63,9 +68,11 @@ export function createInspector(root, { fetcher = (...args) => fetch(...args), b
   let recentLimited = false;
   let gapUntil = null;
   let historyRevision = null;
+  let observedAt = null;
+  let session = {};
 
   function render({ reset = false, prepend = false } = {}) {
-    const next = JSON.stringify([id, tab, history, recent, local, archive, oldest, loading, loadingOlder, error, status, recentLimited, gapUntil]);
+    const next = JSON.stringify([id, tab, history, recent, local, archive, oldest, loading, loadingOlder, error, status, session, recentLimited, gapUntil]);
     if (!reset && signature === next) return;
     signature = next;
     const thread = root.querySelector(".session-thread");
@@ -107,7 +114,10 @@ export function createInspector(root, { fetcher = (...args) => fetch(...args), b
     else nextThread.scrollTop = prepend ? scrollTop + nextThread.scrollHeight - scrollHeight : scrollTop;
     root.querySelector(".session-thread").hidden = tab === "live";
     root.querySelector(".inspector-note").hidden = tab === "live";
-    browserView?.select(tab === "live" ? id : null);
+    browserView?.select(tab === "live" ? id : null, {
+      entries, activity: local?.activity, localState: local?.state, archiveState: archive?.state,
+      observedAt, updatedAt: local?.updatedAt, error, loading, status, session,
+    });
   }
 
   async function refresh(older = false) {
@@ -129,6 +139,21 @@ export function createInspector(root, { fetcher = (...args) => fetch(...args), b
       const data = await response.json();
       if (epoch !== generation || selected !== id) return;
       if (data.id !== selected) throw new Error("Session response did not match the selection.");
+      observedAt = data.observedAt ?? null;
+      // Revocation applies to every response, including an older-page request.
+      // Do not retain content from a context or archive whose identity failed.
+      const restricted = data.local?.state === "restricted" || data.archive.state === "restricted";
+      if (restricted || data.archive.state === "mismatch") {
+        history = []; oldest = null; gapUntil = null; historyRevision = null;
+        archive = data.archive;
+        if (restricted) {
+          recent = []; recentLimited = false;
+          local = { state: "restricted", entries: [], activity: null };
+          archive = { state: "restricted", entries: [], hasMore: false };
+          return;
+        }
+        if (older) return;
+      }
       if (older) {
         if (data.archive.state !== "available") throw new Error(ARCHIVE_NOTE[data.archive.state] ?? "Earlier messages could not be loaded.");
         const known = new Set(history.map((e) => e.id));
@@ -187,15 +212,17 @@ export function createInspector(root, { fetcher = (...args) => fetch(...args), b
   const timer = setInterval(() => { if (id && !document.hidden) void refresh(); }, 4000);
   return {
     showTab(nextTab) { if (id && ["chat", "results", "live"].includes(nextTab)) { tab = nextTab; render({ reset: true }); } },
-    select(nextId, nextStatus = null) {
+    select(nextId, nextStatus = null, nextSession = {}) {
+      const changed = status !== nextStatus || JSON.stringify(session) !== JSON.stringify(nextSession);
       status = nextStatus;
-      if (nextId === id) return;
+      session = nextSession;
+      if (nextId === id) { if (id && changed) render(); return; }
       generation++;
       controller?.abort();
       id = nextId;
       tab = "chat";
       history = []; recent = []; local = archive = oldest = null;
-      loading = loadingOlder = false; error = null; signature = ""; recentLimited = false; gapUntil = null; historyRevision = null;
+      loading = loadingOlder = false; error = null; signature = ""; recentLimited = false; gapUntil = null; historyRevision = null; observedAt = null;
       if (id) { render({ reset: true }); void refresh(); }
       else { root.innerHTML = ""; browserView?.select(null); }
     },

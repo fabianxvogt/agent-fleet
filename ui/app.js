@@ -1,6 +1,7 @@
 import { CARD_H, CARD_W, LANE_PAD, layout, selectVisible, selectAttention, projectOptions, collapseCompleted } from "/layout.js";
+import { createGraphScene, projectGraphScene } from "/graph-scene.js";
 import { createInspector } from "/inspector.js";
-import { createBrowserView } from "/browser-view.js";
+import { createLiveView } from "/live-view.js";
 
 const AGENTS = {
   claude: { label: "Claude", color: "var(--a-claude)" },
@@ -18,7 +19,7 @@ const STATUS_LABEL = { working: "Working", waiting: "Needs you", idle: "Idle", q
 const EDGE_LABEL = { spawn: "started", message: "sent message", report: "reported back", dependency: "feeds", process: "started process" };
 
 const $ = (id) => document.getElementById(id);
-const inspector = createInspector($("session-content"), { browserView: createBrowserView($("session-live")) });
+const inspector = createInspector($("session-content"), { browserView: createLiveView($("session-live")) });
 const state = {
   snap: null,
   health: null,
@@ -39,6 +40,9 @@ const state = {
   view: { x: 40, y: 30, k: 1 },
   needsFit: true,
   lastLayout: null,
+  scene: null,
+  projection: null,
+  staleNodes: new Set(),
   sticky: {}, // lane order + column count, reset on fit / filter / resize
 };
 
@@ -137,11 +141,15 @@ function renderHealth(now = Date.now()) {
   $("canvas").dataset.freshness = dataState;
   $("data-notice").hidden = dataState === "current";
   $("data-notice").textContent = state.snap ? "Showing last known activity. Waiting for a fresh update." : "Waiting for session data…";
-  const staleNodes = new Set((state.snap?.nodes ?? []).filter(n => n.meta?.dataStale || staleSources.has(n.meta?.dataSource ?? n.agent)).map(n => n.id));
-  for (const el of $("canvas").querySelectorAll(".node, .session-row")) el.classList.toggle("data-stale", staleNodes.has(el.dataset.id));
-  for (const el of $("viewport").querySelectorAll(".edge")) el.classList.toggle("data-stale", staleNodes.has(el.dataset.from) || staleNodes.has(el.dataset.to));
-  $("panel-data-notice").hidden = dataState === "current" && !staleNodes.has(state.selected);
+  state.staleNodes = new Set((state.snap?.nodes ?? []).filter(n => n.meta?.dataStale || staleSources.has(n.meta?.dataSource ?? n.agent)).map(n => n.id));
+  decorateFreshness();
+  $("panel-data-notice").hidden = dataState === "current" && !state.staleNodes.has(state.selected);
   renderSources(health, now, threshold);
+}
+
+function decorateFreshness() {
+  for (const el of $("canvas").querySelectorAll(".node, .session-row")) el.classList.toggle("data-stale", state.staleNodes.has(el.dataset.id));
+  for (const el of $("viewport").querySelectorAll(".edge")) el.classList.toggle("data-stale", state.staleNodes.has(el.dataset.from) || state.staleNodes.has(el.dataset.to));
 }
 
 /* ---------- rendering ---------- */
@@ -218,17 +226,22 @@ function render() {
   }
 
   if (state.display === "graph") {
-    const focused = document.activeElement?.closest?.("[data-collapse]")?.dataset.collapse;
+    if ($("session-rows").innerHTML) $("session-rows").innerHTML = "";
     const box = $("canvas").getBoundingClientRect();
     if (state.needsFit) state.sticky = {};
     const L = layout(folded.nodes, folded.edges, { width: box.width - 60, height: box.height - 60 }, state.sticky);
     state.sticky = { order: L.order, cols: L.cols };
     state.lastLayout = { ...L, nodes: folded.nodes, edges: folded.edges };
-    $("viewport").innerHTML = drawGraph(folded.nodes, folded.edges, L, vis.parked, folded.controls);
-    // Relation curves and labels can extend outside the lane rectangles.
-    state.graphBounds = $("viewport").getBBox();
-    if (focused) [...$("viewport").querySelectorAll("[data-collapse]")].find((el) => el.dataset.collapse === focused)?.focus({ preventScroll: true });
-  } else renderList(vis.nodes);
+    state.scene = createGraphScene(folded.nodes, folded.edges, L);
+    state.graphBounds = state.scene.bounds;
+    state.parked = vis.parked;
+    state.projection = null;
+  } else {
+    if ($("viewport").innerHTML) $("viewport").innerHTML = "";
+    state.scene = null;
+    state.projection = null;
+    renderList(vis.nodes);
+  }
   $("empty").hidden = vis.nodes.length > 0;
   state.visibleIds = new Set((state.display === "graph" ? folded.nodes : vis.nodes).map((n) => n.id));
   applySelection();
@@ -269,74 +282,83 @@ function renderList(nodes) {
 
 const cardPos = (L, id) => L.pos.get(id) ?? null;
 
-function drawGraph(nodes, edges, L, parked, controls) {
-  const byId = new Map(nodes.map((n) => [n.id, n]));
+function graphFocus() {
+  const active = document.activeElement;
+  const node = active?.closest?.(".node");
+  if (!node) return null;
+  return { id: node.dataset.id, kind: active.closest("[data-collapse]") ? "fold" : active.closest("[data-live-view]") ? "live" : "node" };
+}
+
+function drawProjection() {
+  if (!state.scene) return;
+  const focus = graphFocus();
+  const box = $("canvas").getBoundingClientRect();
+  const projection = projectGraphScene(state.scene, state.view, box, new Set(focus ? [focus.id] : []));
+  const previous = state.projection;
+  const focusedId = projection.detail ? null : focus?.id;
+  const same = (a, b) => a.length === b.length && a.every((item, i) => item === b[i]);
+  if (previous && previous.detail === projection.detail && previous.focusedId === focusedId
+    && same(previous.nodes, projection.nodes) && same(previous.edges, projection.edges) && same(previous.lanes, projection.lanes)) return;
+  state.projection = { ...projection, focusedId };
+  $("viewport").innerHTML = drawGraph(projection, state.scene, state.parked, state.folded.controls, focus?.id);
+  applySelection();
+  decorateFreshness();
+  if (focus) {
+    const node = [...$("viewport").querySelectorAll(".node")].find((el) => el.dataset.id === focus.id);
+    const target = focus.kind === "fold" ? node?.querySelector("[data-collapse]") : focus.kind === "live" ? node?.querySelector("[data-live-view]") : node;
+    (target ?? node)?.focus({ preventScroll: true });
+  }
+}
+
+function drawGraph(projection, scene, parked, controls, focusedId) {
+  const { nodes, edges, lanes, detail } = projection;
+  const byId = new Map(scene.nodes.map((n) => [n.id, n]));
   let out = "";
-  for (const lane of L.lanes) {
+  for (const [index, lane] of lanes.entries()) {
     const hidden = parked.get(lane.project);
     const meta = [lane.failed ? `${lane.failed} failed` : null, lane.working ? `${lane.working} working` : null, lane.waiting ? `${lane.waiting} need you` : null, `${lane.size} shown`, hidden ? `+${hidden} parked` : null].filter(Boolean).join(" · ");
     out += `<g class="lane"><rect class="lane-bg" x="${lane.x}" y="${lane.y}" width="${lane.width}" height="${lane.height}" rx="12"/>`;
-    out += `<text class="lane-title" x="${lane.x + LANE_PAD}" y="${lane.y + 24}">${esc(lane.project)}</text>`;
-    out += `<text class="lane-meta" x="${lane.x + LANE_PAD}" y="${lane.y + 42}"><title>${esc(meta)}</title>${esc(clip(meta, Math.floor((lane.width - 2 * LANE_PAD) / 6)))}</text></g>`;
+    if (detail) {
+      out += `<clipPath id="lane-heading-${index}"><rect x="${lane.x + LANE_PAD}" y="${lane.y}" width="${Math.max(0, lane.width - 2 * LANE_PAD)}" height="52"/></clipPath><g clip-path="url(#lane-heading-${index})">`;
+      out += `<text class="lane-title" x="${lane.x + LANE_PAD}" y="${lane.y + 24}">${esc(lane.project)}</text>`;
+      out += `<text class="lane-meta" x="${lane.x + LANE_PAD}" y="${lane.y + 42}"><title>${esc(meta)}</title>${esc(clip(meta, Math.floor((lane.width - 2 * LANE_PAD) / 6)))}</text></g>`;
+    }
+    out += "</g>";
   }
 
   let edgeSvg = "";
   for (const e of edges) {
-    const a = cardPos(L, e.from);
-    const b = cardPos(L, e.to);
-    if (!a || !b) continue;
-    const isTree = L.parent.get(e.to) === e.from && (e.kind === "spawn" || e.kind === "process");
     const child = byId.get(e.to);
-    const flow = isTree && child?.status === "working" && !child.meta?.dataStale;
-    const d = edgePath(a, b, isTree);
+    const flow = detail && e.isTree && child?.status === "working" && !child.meta?.dataStale;
+    const stale = state.staleNodes.has(e.from) || state.staleNodes.has(e.to);
     const marker = ["message", "report", "dependency"].includes(e.kind) ? ` marker-end="url(#arrow-${safeKind(e.kind)})"` : "";
-    edgeSvg += `<path class="edge e-${safeKind(e.kind)}${flow ? " flow" : ""}" data-from="${esc(e.from)}" data-to="${esc(e.to)}" d="${d.path}"${marker}><title>${esc(EDGE_LABEL[e.kind] ?? e.kind)}${e.inferred ? " (inferred)" : ""}${e.count > 1 ? ` ×${e.count}` : ""}</title></path>`;
-    if (e.count > 1) edgeSvg += `<g class="edge-badge" data-from="${esc(e.from)}" data-to="${esc(e.to)}"><rect x="${d.mid.x - 13}" y="${d.mid.y - 8}" width="26" height="16" rx="8"/><text x="${d.mid.x}" y="${d.mid.y + 3.5}" text-anchor="middle">×${e.count}</text></g>`;
+    edgeSvg += `<path class="edge e-${safeKind(e.kind)}${flow ? " flow" : ""}${stale ? " data-stale" : ""}" data-from="${esc(e.from)}" data-to="${esc(e.to)}" d="${e.path}"${marker}><title>${esc(EDGE_LABEL[e.kind] ?? e.kind)}${e.inferred ? " (inferred)" : ""}${e.count > 1 ? ` ×${e.count}` : ""}</title></path>`;
+    if (detail && e.count > 1) edgeSvg += `<g class="edge-badge" data-from="${esc(e.from)}" data-to="${esc(e.to)}"><rect x="${e.mid.x - 13}" y="${e.mid.y - 8}" width="26" height="16" rx="8"/><text x="${e.mid.x}" y="${e.mid.y + 3.5}" text-anchor="middle">×${e.count}</text></g>`;
   }
 
   let nodeSvg = "";
   for (const n of nodes) {
-    const p = cardPos(L, n.id);
+    const p = scene.pos.get(n.id);
     if (!p) continue;
-    nodeSvg += drawNode(n, p, controls.get(n.id));
+    nodeSvg += drawNode(n, p, controls.get(n.id), detail || n.id === focusedId);
   }
   return out + edgeSvg + nodeSvg;
 }
 
-function edgePath(a, b, isTree) {
-  const ax = a.x + CARD_W;
-  const ay = a.y + CARD_H / 2;
-  if (isTree || b.x > a.x + 10) {
-    const bx = b.x;
-    const by = b.y + CARD_H / 2;
-    const dx = Math.max(30, (bx - ax) / 2);
-    return { path: `M${ax} ${ay} C${ax + dx} ${ay} ${bx - dx} ${by} ${bx} ${by}`, mid: { x: (ax + bx) / 2, y: (ay + by) / 2 } };
-  }
-  if (Math.abs(b.x - a.x) <= 10) {
-    // same column: loop out to the right
-    const by = b.y + CARD_H / 2;
-    const bulge = 46 + Math.min(120, Math.abs(by - ay) / 4);
-    return { path: `M${ax} ${ay} C${ax + bulge} ${ay} ${ax + bulge} ${by} ${ax} ${by}`, mid: { x: ax + bulge * 0.75, y: (ay + by) / 2 } };
-  }
-  // target is left of source: leave from the left edge of the source into the right edge of the target
-  const sx = a.x;
-  const tx = b.x + CARD_W;
-  const by = b.y + CARD_H / 2;
-  const dx = Math.max(30, (sx - tx) / 2);
-  return { path: `M${sx} ${ay} C${sx - dx} ${ay} ${tx + dx} ${by} ${tx} ${by}`, mid: { x: (sx + tx) / 2, y: (ay + by) / 2 } };
-}
-
-function drawNode(n, p, fold) {
+function drawNode(n, p, fold, detail) {
   const agent = agentInfo(n.agent);
   const role = n.role ? clip(n.role, 18) : null;
   const sub = n.meta?.dataStale ? `Last known: ${STATUS_LABEL[n.status] ?? n.status}` : [AGENTS[n.agent] ? agent.label : n.agent, n.surface && n.surface !== "in-process" ? n.surface : null, shortModel(n.model)].filter(Boolean).join(" · ");
   const roleW = role ? Math.round(role.length * 6.1 + 12) : 0;
   const titleMax = Math.floor((CARD_W - 46 - (role ? roleW + 6 : 0)) / 6.9);
-  const cls = ["node", `s-${safeStatus(n.status)}`, n.meta?.dataStale ? "data-stale" : "", n.meta?.placeholder ? "placeholder" : "", n.liveView?.available ? "has-live" : ""].join(" ");
+  const stale = n.meta?.dataStale || state.staleNodes.has(n.id);
+  const cls = ["node", `s-${safeStatus(n.status)}`, stale ? "data-stale" : "", n.meta?.placeholder ? "placeholder" : "", n.liveView?.available ? "has-live" : "", detail ? "" : "compact"].join(" ");
   const folded = Boolean(fold?.hiddenCount);
   const foldLabel = fold ? `${folded ? "Show" : "Hide"} ${fold.eligibleCount} finished sessions under ${n.title}` : "";
-  return `<g class="${cls}" data-id="${esc(n.id)}" transform="translate(${p.x} ${p.y})">
-    <title>${esc(n.title)}\n${esc(agent.label)} · ${n.meta?.dataStale ? "Last known: " : ""}${esc(STATUS_LABEL[n.status] ?? n.status)}${n.attention?.reason ? ` · ${esc(n.attention.reason)}${n.attention.evidence === "inferred" ? " (inferred)" : ""}` : ""}${n.cwd ? `\n${esc(n.cwd)}` : ""}</title>
+  const opening = `<g class="${cls}" data-id="${esc(n.id)}" transform="translate(${p.x} ${p.y})" role="button" tabindex="0" aria-label="${esc(n.title)} · ${esc(STATUS_LABEL[n.status] ?? n.status)}" aria-pressed="false" style="--node-status:var(--s-${safeStatus(n.status)})">
+    <title>${esc(n.title)}\n${esc(agent.label)} · ${n.meta?.dataStale ? "Last known: " : ""}${esc(STATUS_LABEL[n.status] ?? n.status)}${n.attention?.reason ? ` · ${esc(n.attention.reason)}${n.attention.evidence === "inferred" ? " (inferred)" : ""}` : ""}${n.cwd ? `\n${esc(n.cwd)}` : ""}</title>`;
+  if (!detail) return `${opening}<rect class="card" width="${CARD_W}" height="${CARD_H}" rx="9"/><rect class="stripe" x="7" y="10" width="3.5" height="${CARD_H - 20}" fill="${agent.color}"/></g>`;
+  return `${opening}
     <rect class="card" width="${CARD_W}" height="${CARD_H}" rx="9"/>
     <rect class="stripe" x="7" y="10" width="3.5" height="${CARD_H - 20}" fill="${agent.color}"/>
     <text class="title" x="19" y="22">${esc(clip(n.title, titleMax))}</text>
@@ -355,16 +377,21 @@ function applySelection() {
     row.classList.toggle("selected", row.dataset.id === sel);
     row.querySelector(".session-name")?.setAttribute("aria-pressed", String(row.dataset.id === sel));
   });
-  vp.querySelectorAll(".node").forEach((g) => g.classList.remove("selected", "related", "dim"));
+  vp.querySelectorAll(".node").forEach((g) => {
+    g.classList.remove("selected", "related", "dim");
+    g.setAttribute("aria-pressed", String(g.dataset.id === sel));
+  });
   vp.querySelectorAll(".edge, .edge-badge").forEach((e) => e.classList.remove("dim", "hl"));
   if (!sel || !state.visibleIds?.has(sel)) return; // selected node is not drawn: do not dim the whole graph
   const related = new Set([sel]);
+  for (const edge of state.scene?.edges ?? []) {
+    if (edge.from === sel || edge.to === sel) {
+      related.add(edge.from);
+      related.add(edge.to);
+    }
+  }
   vp.querySelectorAll(".edge, .edge-badge").forEach((e) => {
     const touches = e.dataset.from === sel || e.dataset.to === sel;
-    if (touches) {
-      related.add(e.dataset.from);
-      related.add(e.dataset.to);
-    }
     e.classList.add(touches ? "hl" : "dim");
   });
   vp.querySelectorAll(".node").forEach((g) => {
@@ -494,7 +521,7 @@ function renderPanel() {
     </div>
     ${n.attention?.reason ? `<p class="attention-note">${esc(n.attention.reason)}${n.attention.evidence === "inferred" ? " · inferred from session activity" : ""}</p>` : ""}
     ${n.meta?.dataStale ? `<p class="attention-note stale-note">This source is unavailable. Activity shown is from its last successful update.</p>` : ""}`;
-  inspector.select(n.id, `${n.meta?.dataStale ? "Last known: " : ""}${STATUS_LABEL[n.status] ?? n.status}`);
+  inspector.select(n.id, `${n.meta?.dataStale ? "Last known: " : ""}${STATUS_LABEL[n.status] ?? n.status}`, { title: n.title, status: n.status, lastActivityAt: n.lastActivityAt, stale: Boolean(n.meta?.dataStale) });
   $("panel-body").innerHTML = `
     ${actions.length ? `<div class="actions">${actions.join("")}</div>` : ""}
     <dl class="facts">${facts.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${v}</dd>`).join("")}</dl>
@@ -568,6 +595,7 @@ function applyView() {
   $("zoom-in").disabled = !limits || state.view.k >= limits.maxScale - 1e-9;
   const { x, y, k } = state.view;
   $("viewport").setAttribute("transform", `translate(${x} ${y}) scale(${k})`);
+  drawProjection();
 }
 
 function fit() {
@@ -621,11 +649,11 @@ function select(id, { center = false, live = false } = {}) {
     return;
   }
   // opening the panel narrows the canvas; bring the node back if it ended up hidden
-  const g = [...$("viewport").querySelectorAll(".node")].find((el) => el.dataset.id === id);
+  const p = state.scene?.pos.get(id);
   const box = $("canvas").getBoundingClientRect();
-  const r = g?.getBoundingClientRect();
-  const offscreen = r && (r.right > box.right || r.left < box.left || r.bottom > box.bottom || r.top < box.top);
-  if (center || offscreen) centerOn(id);
+  const v = state.view;
+  const offscreen = p && (v.x + (p.x + CARD_W) * v.k > box.width || v.x + p.x * v.k < 0 || v.y + (p.y + CARD_H) * v.k > box.height || v.y + p.y * v.k < 0);
+  if (center || offscreen || v.k < 0.45) centerOn(id);
   else applyView();
 }
 
@@ -659,10 +687,12 @@ function filtersChanged() {
 }
 
 function setDisplay(display) {
+  const previous = state.display;
   state.display = display;
   savePref("display", display);
   state.needsFit = true;
   render();
+  if (previous !== "graph" && display === "graph" && state.selected) centerOn(state.selected);
 }
 
 function wire() {
@@ -712,10 +742,11 @@ function wire() {
     if (!["Enter", " "].includes(ev.key)) return;
     const fold = ev.target.closest("[data-collapse]");
     if (fold) { ev.preventDefault(); toggleCollapse(fold.dataset.collapse); return; }
-    if (!ev.target.closest("[data-live-view]")) return;
     const node = ev.target.closest(".node");
-    if (node) { ev.preventDefault(); select(node.dataset.id, { live: true }); }
+    if (node) { ev.preventDefault(); select(node.dataset.id, { live: Boolean(ev.target.closest("[data-live-view]")) }); }
   });
+  // Focus is pinned by the next view update. Replacing SVG on focusin can remove
+  // the pointer's target between mousedown (focus) and its eventual click.
   $("zoom-in").onclick = () => zoomAt(1.2, canvas.clientWidth / 2, canvas.clientHeight / 2);
   $("zoom-out").onclick = () => zoomAt(1 / 1.2, canvas.clientWidth / 2, canvas.clientHeight / 2);
   $("zoom-fit").onclick = () => {

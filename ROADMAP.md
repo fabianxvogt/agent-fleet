@@ -1,11 +1,12 @@
 # Roadmap
 
 ## Now
-- v0.9.1 fixes deep-tree computation failures and missing ancestry on top of v0.9's independent source updates. List filtering and folded large trees are verified; fully expanded extreme graphs still need rendering work. Validate sustained daily freshness and larger-project readability; agentsview remains the background archive.
+- v0.10.0 adds automatic Live selection: a fresh supported browser image, observed terminal output, or the latest agent activity and timestamp. Large graphs now use compact overviews and visible detail. Validate daily runtime coverage and freshness; agentsview remains the background archive.
 
 ## Next
-- **Large-graph rendering:** profile SVG/DOM rendering and reduce offscreen or unreadable detail. A fully expanded 3,000-level chain still caused browser-control timeouts and an in-app browser page crash after the computation fixes; List and folded views worked. Preserve selection, keyboard access and relation visibility. [Evidence](docs/VERIFICATION.md#v091-deep-tree-robustness--2026-10-20).
-- **v0.10 artifact previews:** Files in Results, raster images, escaped text/code previews and explicit document downloads, with session-bound access and useful missing/restricted states. Preserve previews across polling and work in the native app. [Design and acceptance checks](docs/ARTIFACTS.md); current Results still displays text/tool outputs and agent responses.
+- **v0.11 artifact previews:** Files in Results, raster images, escaped text/code previews and explicit document downloads, with session-bound access and useful missing/restricted states. Preserve previews across polling and work in the native app. [Design and acceptance checks](docs/ARTIFACTS.md); current Results still displays text/tool outputs and agent responses.
+- **Everyday Live coverage:** validate shell output and browser discovery across actual supported agent workflows. Log polling cannot display output before the runtime records it; generic orchestration calls remain tool activity. Keep old observations explicit and add runtime formats only with evidence.
+- **Large-graph follow-up:** the synthetic 3,000-level chain now supports overview, readable zoom and selection. Continue checking wide graphs and sustained updates; culling reduces drawing, while layout still processes the matching graph. [Evidence](docs/VERIFICATION.md#v010-automatic-live-and-graph-rendering--2026-10-20).
 - **Sustained freshness:** continue daily freshness checks using process-stage timings for outliers. The latest 60 health samples were current; finite samples do not establish an uptime guarantee.
 - **Browser coverage:** validate automatic discovery during normal terminal-agent work. Private-pipe-only browser tools need a runtime-specific export; iframe click coordinates and following an owner's active tab remain unimplemented. Newly discovered pages appear in the Live selector.
 - **Attention coverage:** validate supported input/approval events in everyday use; extend runtime-specific formats when evidence is available. Prose questions stay labeled as inferred; bounded tails cannot recover omitted events.
@@ -24,12 +25,18 @@
 - Remote machines over SSH (same adapters, remote `ps`/`lsof`).
 
 ## Done
+- 2026-10-20 v0.10 automatic Live and graph rendering (`INCREMENTAL / EMPIRICAL`):
+  - fresh browser images take priority; recorded commands/output and agent activity fill the view when no image is available, with observation times and explicit errors/stale states
+  - validated shell metadata distinguishes pending, observed-running, completed and failed commands; continuation results supersede historical process state
+  - browser loss, decode failure, selection changes and restricted contexts clear obsolete images; browser selection/setup remain usable alongside fallback activity
+  - compact graph overviews and viewport detail avoid drawing unreadable text and offscreen cards; complete bounds, selection, relations and keyboard focus are preserved
+  - 228 tests pass without skips; independent reviews corrected execution-state merging, pagination revocation, focus/click handling and stale-color recovery; installed service and signed v0.10.0 app updated; [verification and limits](docs/VERIFICATION.md#v010-automatic-live-and-graph-rendering--2026-10-20)
 - 2026-10-20 v0.9.1 deep-tree robustness (`INCREMENTAL / EMPIRICAL`):
   - complete filtered ancestry, linear cycle detection and iterative layout remove the reproduced 20-ancestor truncation and 3,000-level call-stack failure
   - shared fold paths replace duplicated ancestor arrays; List avoids graph-fold computation while preserving selection and fold preferences
   - reproducible synthetic benchmark: 3,000-level selection median 551 → 4.9 ms, fold projection 1,076 → 14.4 ms; full layout completes in 13.2 ms, previously a stack error
   - 184 tests pass without skips; independent comparison of 500 seeded graphs preserves existing ordering, geometry and folding semantics; browser rendering limits remain above
-  - [verification and benchmark limits](docs/VERIFICATION.md#v091-deep-tree-robustness--2026-10-20); artifact previews designed for v0.10, not implemented
+  - [verification and benchmark limits](docs/VERIFICATION.md#v091-deep-tree-robustness--2026-10-20); artifact previews designed, not implemented
 - 2026-10-18 v0.9 repository release preparation (`INCREMENTAL / EMPIRICAL`):
   - fresh-clone README with synthetic preview; separate usage, development and verification references; removed unnecessary real-project examples
   - documented checks, sequential browser integration tests and ignore rules for local credentials/runtime state and generated output

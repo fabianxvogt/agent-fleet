@@ -66,15 +66,24 @@ Only the selected session's content refreshes, every four seconds while the dash
 
 Content availability follows the runtime's recorded events. The inspector excludes private thinking/reasoning and system records; it displays text rather than executing log content. Credential redaction is a secondary defense, not a guarantee that all sensitive text is removed.
 
-### Browser Live
+### Automatic Live
 
-Click a gold **LIVE** badge or choose **Live** in the inspector. Supported dedicated Chromium pages appear automatically when ownership is unambiguous. **Browser view** switches between multiple pages associated with a session. Multiple sessions can have available views at once.
+Choose **Live** in any selected session's inspector. It automatically shows the most useful available evidence:
+
+1. A fresh image from a supported browser.
+2. A recent observed terminal command, with its working directory and output.
+3. The latest tool action, agent response or session activity.
+4. The last known observation with its timestamp, or the session status while content loads.
+
+Commands distinguish waiting for output, running when last observed, completion and failure. Output updates when the runtime writes it to the session log; the inspector polls every four seconds while visible. It does not stream the terminal screen or expose private reasoning. Refresh failures and old observations are labeled; a frozen or unavailable browser image gives way to recorded activity.
+
+A gold **LIVE** badge opens an available browser directly. Supported dedicated Chromium pages appear automatically when ownership is unambiguous. **Browser view** switches between multiple pages associated with a session. Multiple sessions can have available views at once.
 
 The dashboard observes the selected page while the terminal agent retains control. Switching away or hiding the dashboard stops capture; the browser continues running. Optional terminal commands create a separate managed browser or attach an explicit existing browser. Private-pipe-only tools require another integration. See [browser commands and boundaries](BROWSER.md).
 
 ## Graph navigation
 
-Drag the graph to pan. Pinch or Command-scroll to zoom. Navigation stays within the drawn graph's bounds, with a small margin; zooming out stops at the overview.
+Drag the graph to pan. Pinch or Command-scroll to zoom. Navigation stays within the complete graph's bounds, with a small margin; zooming out stops at the overview. Large overviews use compact status-colored cards. Select a card with a click, Enter or Space to zoom to its details. At readable zoom, offscreen cards are omitted from drawing while selection, relations and the full list remain available. Switching back from List centers the selected session.
 
 | Shortcut | Action |
 | --- | --- |
