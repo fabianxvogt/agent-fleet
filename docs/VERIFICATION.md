@@ -1,6 +1,26 @@
 # Verification and limitations
 
-Historical checks are grouped by feature and date. The latest release checks are for v0.9.1; older test counts and observations describe earlier revisions. See the [documentation index](README.md) for setup and usage.
+Historical checks are grouped by feature and date. The latest release checks are for v0.11; older test counts and observations describe earlier revisions. See the [documentation index](README.md) for setup and usage.
+
+## v0.11 files and readable Live — 2026-10-20
+
+Classification: **INCREMENTAL / EMPIRICAL**. Results now includes Files associated with explicit inline assistant Markdown links/images or successful supported file writes. Raster images and escaped text/code load on expansion; supported documents have an explicit download action. Association labels distinguish linked files from written files. There is no directory scan, remote fetch or external output-root integration. [Formats, limits and lifetime](ARTIFACTS.md) describe the implemented contract.
+
+Access uses opaque session-bound IDs and canonical workspace checks. Original and resolved paths pass private-context and credential exclusions; broad roots, nonregular files and escaping symlinks are rejected. File/source identity, branch and archive revisions are revalidated before serving. A same-size source replacement with preserved modification time no longer reuses old cached content. Pi/OMP/fleet local references follow their active branch; archive artifacts for these runtimes remain excluded until archive branch identity is available. Evidence survives ordinary tail rollover within bounded quotas and expiry.
+
+Independent backend review corrected text-download encoding, source cache identity, branch/revision revocation, work bounds, case-insensitive home aliases, canonical workspace aliases and code-example exclusions. Deterministic tests reject directory-symlink escape after open, file mutation during read and FIFO replacement before open. Content is redacted where supported, raster signatures are checked, and HTTP responses use attachment/no-store/nosniff/restrictive policies. This is bounded empirical verification, not a security proof or complete image decoder.
+
+The reported Live screenshot showed an idle session's internal Claude task notification twice, including as a user instruction. Live now separates current lifecycle from timestamped recorded work, keeps the latest meaningful output above a readable session notice and collapses optional browser setup. The orphan-command notice explicitly says completion was not confirmed. Claude normalization only recognizes a single full notification envelope; ordinary questions, quoted examples and multiple notifications with an intervening instruction remain conversation. Independent review found and corrected that mixed-envelope case with a regression that failed before the fix.
+
+Synthetic browser checks verified the idle lifecycle, prior response, readable notice, absence of duplicate/raw runtime markup and collapsed/expandable browser setup. File checks verified decoded image and escaped text previews, reading position/focus across polling, unavailable outside-workspace/credential paths, and removal of a cached preview after deleting its fixture file. Native WebKit checks verified image/text previews and the same readable Live state. No real session content was used in fixtures or screenshots.
+
+The native download bridge accepts only the configured origin's session-file attachment route and bounded responses. Downloads stage beside the chosen destination and publish only on completion; redirects and navigation downloads are rejected. Native UI checks exercised Cancel, saving a synthetic 605-byte PDF, confirming replacement of a synthetic existing file, and a controlled HTTP failure that left the dashboard open. Saved bytes matched the fixture. Independent native/UI review and compiled Swift policy tests passed; the UI review's focus-restoration finding was corrected.
+
+Verification: **299 tests passed, zero failed or skipped**, including isolated Chromium integration and native download policy tests. Relevant suites are [artifacts](../test/artifacts.test.mjs), [content](../test/content.test.mjs), [HTTP/details](../test/details.test.mjs), [file UI](../test/artifact-view.test.mjs), [inspector](../test/inspector.test.mjs), [Live](../test/live-view.test.mjs), [browser lifecycle](../test/browser-view.test.mjs) and [native downloads](../test/native-download.test.mjs). The installed background service answers health checks with current sources. The rebuilt **0.11.0 / build 12** native app passes signature verification and reopens with Current and Graph/List controls.
+
+All **62 JavaScript files** pass syntax checks, **118 local documentation links/anchors** resolve, the CLI help command succeeds, and `git diff --check` is clean.
+
+Remaining checks: everyday runtime association/Live coverage, sustained workloads and a real logout/login cycle. Reference-style Markdown and `file:` URLs are unsupported; documents are downloaded without content validation, and text redaction cannot guarantee removal of every secret. No formal proof or scientific novelty is claimed.
 
 ## v0.10 automatic Live and graph rendering — 2026-10-20
 

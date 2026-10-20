@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, rm, symlink, writeFile, stat, rename, utimes } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { request } from "node:http";
@@ -116,4 +116,110 @@ test("HTTP details require a known session, valid cursor, same origin and loopba
   });
   assert.equal(badHost, 403);
   for (const asset of ["/", "/app.js", "/inspector.js"]) assert.equal((await fetch(base + asset)).status, 200);
+});
+
+async function artifactFixture(t) {
+  const f = await fixture(t);
+  const cwd = join(f.home, "project");
+  await mkdir(cwd);
+  const files = [
+    ["report.txt", "API_KEY='synthetic secret value'\n<script>inert text</script>\n"],
+    ["picture.png", Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aTh8AAAAASUVORK5CYII=", "base64")],
+    ['résumé "final".pdf', "%PDF-1.4\nSynthetic fixture\n%%EOF\n"],
+  ];
+  for (const [name, value] of files) await writeFile(join(cwd, name), value);
+  const text = files.map(([name]) => `[Result](<${join(cwd, name)}>)`).join("\n");
+  await writeFile(f.source, JSON.stringify({ type: "response_item", timestamp: T, payload: { type: "message", role: "assistant", phase: "final", content: [{ type: "output_text", text }] } }) + "\n");
+  const node = { ...f.node, cwd, agentsviewId: null };
+  const details = createDetailsService(f.config);
+  const nodes = [node, { ...node, id: "codex:another-session" }];
+  const server = createDashboardServer({ latest: () => ({ nodes }) }, details);
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => { server.closeAllConnections(); server.close(); });
+  return { ...f, node, cwd, details, nodes, base: `http://127.0.0.1:${server.address().port}`, prefix: `/api/sessions/${encodeURIComponent(node.id)}` };
+}
+
+test("artifact evidence reaches session-bound HTTP previews and explicit downloads", async (t) => {
+  const f = await artifactFixture(t);
+  const data = await (await fetch(f.base + f.prefix + "/details")).json();
+  assert.equal(data.artifactState, "available");
+  assert.equal(data.artifacts.length, 3);
+  assert.ok(!data.local.entries.some((entry) => Object.hasOwn(entry, "artifactCandidates")));
+  assert.ok(data.artifacts.every((file) => !Object.hasOwn(file, "path")));
+  const text = data.artifacts.find((file) => file.kind === "text");
+  assert.equal(text.associations[0].kind, "linked");
+  const response = await fetch(`${f.base}${f.prefix}/artifacts/${text.id}/preview`);
+  assert.equal(response.headers.get("cache-control"), "no-store");
+  assert.equal(response.headers.get("x-content-type-options"), "nosniff");
+  assert.equal(response.headers.get("content-security-policy"), "default-src 'none'; sandbox");
+  const preview = await response.json();
+  assert.equal(preview.state, "available");
+  assert.match(preview.text, /\[redacted\]/);
+  assert.doesNotMatch(preview.text, /synthetic secret value/);
+  assert.match(preview.text, /<script>inert text<\/script>/, "JSON contains text, never an executable document");
+  const textDownload = await fetch(`${f.base}${f.prefix}/artifacts/${text.id}/download`);
+  assert.equal(textDownload.status, 200);
+  assert.match(textDownload.headers.get("content-disposition"), /^attachment;/);
+  assert.doesNotMatch(await textDownload.text(), /synthetic secret value/);
+  const picture = data.artifacts.find((file) => file.kind === "image");
+  const image = await (await fetch(`${f.base}${f.prefix}/artifacts/${picture.id}/preview`)).json();
+  assert.match(image.image, /^data:image\/png;base64,/);
+  const document = data.artifacts.find((file) => file.kind === "document");
+  const download = await fetch(`${f.base}${f.prefix}/artifacts/${document.id}/download`);
+  assert.equal(download.status, 200);
+  assert.match(download.headers.get("content-disposition"), /^attachment; filename=/);
+  assert.match(download.headers.get("content-disposition"), /filename\*=UTF-8''r%C3%A9sum%C3%A9/);
+  assert.equal(download.headers.get("content-type"), "application/octet-stream");
+  assert.match(await download.text(), /^%PDF-1.4/);
+  assert.equal((await fetch(f.base + "/artifact-view.js")).status, 200);
+});
+
+test("artifact HTTP routes reject cross-origin access, cross-session IDs and revoked sessions", async (t) => {
+  const f = await artifactFixture(t);
+  const data = await f.details.get(f.node);
+  const file = data.artifacts.find((file) => file.kind === "text");
+  const path = `${f.prefix}/artifacts/${file.id}/preview`;
+  for (const headers of [{ origin: "https://external.invalid" }, { "sec-fetch-site": "cross-site" }]) {
+    assert.equal((await fetch(f.base + path, { headers })).status, 403);
+  }
+  const cross = await (await fetch(`${f.base}/api/sessions/codex%3Aanother-session/artifacts/${file.id}/preview`)).json();
+  assert.equal(cross.state, "expired");
+  assert.equal((await fetch(f.base + path, { method: "POST" })).status, 405);
+  assert.equal((await fetch(f.base + `${f.prefix}/artifacts/%2Fetc%2Fpasswd/preview`)).status, 404);
+  f.nodes[0] = { ...f.node, cwd: join(f.home, "body-os") };
+  assert.equal((await (await fetch(f.base + path)).json()).state, "expired");
+  f.nodes.splice(0, 1);
+  assert.equal((await fetch(f.base + path)).status, 404);
+});
+
+test("artifact requests revalidate deleted files instead of serving retained bytes", async (t) => {
+  const f = await artifactFixture(t);
+  const data = await f.details.get(f.node);
+  const file = data.artifacts.find((file) => file.kind === "image");
+  await rm(join(f.cwd, file.name));
+  const response = await fetch(`${f.base}${f.prefix}/artifacts/${file.id}/preview`);
+  assert.notEqual((await response.json()).state, "available");
+  const download = await fetch(`${f.base}${f.prefix}/artifacts/${file.id}/download`);
+  assert.ok([404, 409, 410].includes(download.status));
+  assert.equal(download.headers.get("content-disposition"), null);
+});
+
+test("same-sized source replacement cannot bind cached artifact evidence to a new transcript", async (t) => {
+  const f = await artifactFixture(t);
+  await writeFile(join(f.cwd, "old.txt"), "old");
+  await writeFile(join(f.cwd, "new.txt"), "new");
+  const transcript = (name) => JSON.stringify({ type: "response_item", timestamp: T, payload: { type: "message", role: "assistant", content: [{ type: "output_text", text: `[Result](${name}.txt)` }] } }) + "\n";
+  await writeFile(f.source, transcript("old"));
+  const previous = await f.details.get(f.node);
+  const oldId = previous.artifacts[0].id;
+  const stamp = await stat(f.source);
+  const replacement = f.source + ".replacement";
+  await writeFile(replacement, transcript("new"));
+  await utimes(replacement, stamp.atime, stamp.mtime);
+  await rename(replacement, f.source);
+  const changed = await f.details.get(f.node);
+  assert.match(changed.local.entries[0].text, /new\.txt/);
+  assert.deepEqual(changed.artifacts.map((file) => file.name), ["new.txt"]);
+  assert.equal((await f.details.artifact(f.node, oldId)).state, "expired");
+  assert.equal(changed.local.sourceIdentity, undefined);
 });

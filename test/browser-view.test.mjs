@@ -158,3 +158,26 @@ test("repeated browser status events cannot keep an old image prioritized foreve
   assert.equal(f.states.at(-1).hasFrame, false);
   assert.equal(f.sources[0].closed, true);
 });
+
+test("optional browser setup starts collapsed and reconnects preserve the expanded control", (t) => {
+  const f = fixture(t);
+  f.view.select("a");
+  assert.match(f.root.innerHTML, /<details class="browser-setup" hidden><summary>Browser setup<\/summary>/);
+  f.sources[0].emit("status", { state: "unavailable", startCommand: "node browser.mjs" });
+  assert.equal(f.el(".browser-setup").hidden, false);
+  assert.match(f.el(".browser-help").innerHTML, /data-copy="node browser.mjs"/);
+  f.el(".browser-setup").open = true;
+  let writes = 0;
+  let help = f.el(".browser-help").innerHTML;
+  Object.defineProperty(f.el(".browser-help"), "innerHTML", {
+    get() { return help; },
+    set(next) { help = next; writes++; },
+  });
+  t.mock.timers.tick(3000);
+  f.sources[1].emit("status", { state: "unavailable", startCommand: "node browser.mjs" });
+  assert.equal(f.el(".browser-setup").open, true);
+  assert.equal(writes, 0, "polling leaves the copy button and its focus intact");
+  t.mock.timers.tick(3000);
+  f.sources[2].emit("status", live()); f.sources[2].emit("frame", frame()); f.images.at(-1).onload();
+  assert.equal(f.el(".browser-setup").hidden, true);
+});

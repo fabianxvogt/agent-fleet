@@ -255,6 +255,9 @@ button:focus-visible { outline: 2px solid var(--a-codex); outline-offset: 2px; }
 .load-history { display: block; width: 100%; margin: 0 0 12px; }
 .chat-entry { padding: 12px; border-radius: 9px; border: 1px solid var(--border); background: var(--surface-2); margin: 8px 0; }
 .chat-entry.from-user { border-left: 3px solid var(--a-codex); }
+.session-notice { background: transparent; }
+.session-notice > strong { font-size: 12px; }
+.session-notice .message-text { color: var(--muted); margin-top: 5px; }
 .entry-heading { display: flex; justify-content: space-between; color: var(--muted); font-size: 10.5px; margin-bottom: 7px; }
 .entry-heading time { font-variant-numeric: tabular-nums; color: var(--faint); }
 .message-text { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12px; line-height: 1.65; }
@@ -270,6 +273,25 @@ button:focus-visible { outline: 2px solid var(--a-codex); outline-offset: 2px; }
 .session-metadata { border-top: 1px solid var(--border); margin-top: 18px; padding-top: 12px; }
 .session-metadata > summary { color: var(--muted); cursor: pointer; font-size: 12px; margin-bottom: 12px; }
 
+/* files associated with observed session entries */
+.session-artifacts { border-top: 1px solid var(--border); margin-top: 16px; padding-top: 2px; }
+.artifact-heading h4 { display: flex; align-items: baseline; gap: 8px; }
+.artifact-heading h4 span { color: var(--faint); font-weight: 400; }
+.artifact-entry { border: 1px solid var(--border); border-radius: 9px; background: var(--surface-2); padding: 11px 12px; margin: 9px 0; }
+.artifact-entry summary { cursor: pointer; color: var(--text); font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; }
+.artifact-kind { color: var(--faint); font-size: 10px; margin-left: 10px; }
+.artifact-metadata { color: var(--faint); font-size: 10px; line-height: 1.6; margin-top: 10px; overflow-wrap: anywhere; }
+.artifact-associations { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 7px; }
+.artifact-associations span { color: var(--muted); font-size: 10px; border: 1px solid var(--border); border-radius: 5px; padding: 2px 5px; }
+.artifact-note, .artifact-empty { color: var(--muted); font-size: 11px; line-height: 1.6; }
+.artifact-empty { padding: 8px 0; }
+.artifact-error { color: var(--s-failed); }
+.artifact-image { display: block; max-width: 100%; max-height: 440px; object-fit: contain; margin: 12px auto 2px; border-radius: 5px; }
+.artifact-text { max-height: 360px; overflow: auto; overscroll-behavior: contain; margin: 12px 0 0; padding: 12px; border-radius: 6px; background: var(--bg); color: var(--text); white-space: pre-wrap; overflow-wrap: anywhere; font: 11px/1.65 var(--mono); }
+.artifact-download, [data-artifact-retry] { display: inline-block; border: 1px solid var(--border); border-radius: 7px; background: var(--surface); color: var(--text); padding: 7px 10px; font: 11px var(--sans); cursor: pointer; text-decoration: none; overflow-wrap: anywhere; }
+.artifact-download:hover, [data-artifact-retry]:hover { border-color: var(--border-strong); }
+.artifact-entry summary:focus-visible, .artifact-text:focus-visible, .artifact-download:focus-visible, [data-artifact-retry]:focus-visible { outline: 2px solid var(--a-codex); outline-offset: 3px; }
+
 /* read-only terminal browser */
 .node.has-live .card { stroke: #be9c4b; }
 .node.compact .card { fill: var(--node-status); fill-opacity: .28; stroke: var(--node-status); }
@@ -283,7 +305,8 @@ button:focus-visible { outline: 2px solid var(--a-codex); outline-offset: 2px; }
 .live-badge:hover rect, .live-badge:focus rect { fill: #ffdc86; stroke: #fff2c9; stroke-width: 2; }
 #session-live { margin-top: 12px; }
 .live-source-heading, .live-activity-heading { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; }
-.live-source-heading { border-top: 1px solid var(--border); padding-top: 12px; }
+.live-source-heading { padding-top: 5px; }
+.live-status-label { font-size: 15px; }
 .live-source-heading span, .live-activity-heading time { color: var(--faint); font-size: 10px; }
 .live-source-note { color: var(--muted); font-size: 11px; line-height: 1.6; }
 .live-fallback { border: 1px solid var(--border); border-radius: 9px; background: #090d12; padding: 14px; }
@@ -292,6 +315,9 @@ button:focus-visible { outline: 2px solid var(--a-codex); outline-offset: 2px; }
 .live-command, .live-detail, .live-output { white-space: pre-wrap; overflow-wrap: anywhere; font: 11px/1.65 var(--mono); margin: 12px 0 0; max-height: 420px; overflow: auto; }
 .live-command { color: var(--a-codex); border-bottom: 1px solid var(--border); padding-bottom: 12px; }
 .live-detail { font-family: var(--sans); font-size: 12px; }
+.live-notice { padding: 12px 0 0; }
+.live-notice-label { color: var(--faint); font-size: 10px; margin-bottom: 7px; }
+.live-notice p { color: var(--muted); font-size: 11px; line-height: 1.6; white-space: pre-wrap; overflow-wrap: anywhere; margin-bottom: 0; }
 .live-output { color: var(--text); }
 .live-output:focus-visible { outline: 1px solid var(--a-codex); outline-offset: 4px; }
 .browser-toolbar { display: flex; align-items: center; gap: 10px; margin: 12px 0; min-width: 0; }
@@ -312,6 +338,9 @@ button:focus-visible { outline: 2px solid var(--a-codex); outline-offset: 2px; }
 .live-browser[data-has-frame="false"] .browser-toolbar,
 .live-browser[data-has-frame="false"] .browser-caption { display: none; }
 .browser-help { color: var(--muted); font-size: 12px; line-height: 1.6; }
+.browser-setup { border-top: 1px solid var(--border); padding-top: 10px; margin-top: 14px; }
+.browser-setup summary { cursor: pointer; color: var(--muted); font-size: 11px; }
+.browser-setup summary:focus-visible, .browser-help button:focus-visible { outline: 2px solid var(--a-codex); outline-offset: 3px; }
 .browser-help button { border: 1px solid var(--border); background: var(--surface-2); color: var(--text); border-radius: 7px; padding: 7px 10px; cursor: pointer; }
 @keyframes browser-click { 0% { transform: scale(0.6); opacity: 1; } 30% { transform: scale(1.5); opacity: 0.9; } 100% { transform: scale(1.8); opacity: 0; } }
 .browser-demo { background: radial-gradient(ellipse at 80% 0%, #1d534a 0%, transparent 65%), #0b131c; display: grid; place-content: center; overflow: auto; }

@@ -52,11 +52,34 @@ on the same port; an installed background service already owns the default port.
 | `src/collector.mjs`, `src/procs.mjs` | Independent source refreshes, process ownership and freshness |
 | `src/attention.mjs` | Supported input, completion and failure events |
 | `src/server.mjs`, `src/details.mjs`, `src/session-content.mjs` | Local HTTP/SSE server and bounded inspector content |
+| `src/artifacts.mjs`, `ui/artifact-view.js` | Session-associated files, filesystem access policy and on-demand previews |
 | `src/browser/` | Managed browsers, discovery and observation of supported existing browsers |
 | `src/service.mjs`, `src/desktop.mjs`, `desktop/` | macOS login service and native app |
 | `ui/layout.js`, `ui/graph-scene.js` | Complete graph geometry and viewport projection |
 | `ui/app.js`, `ui/inspector.js`, `ui/live-view.js`, `ui/browser-view.js` | Navigation, content, automatic Live selection and browser observation |
 | `test/` | Node test runner suites with synthetic fixtures |
+
+## File previews and Live activity
+
+The [artifact contract](ARTIFACTS.md) documents supported associations, file types
+and quotas. Keep path validation in `src/artifacts.mjs`; HTTP requests accept
+session-bound opaque IDs, not paths. Changes to association parsing must preserve
+active-branch filtering, source identity and archive revision invalidation.
+
+Use synthetic files under temporary fixture workspaces for access, replacement
+and retention tests. In addition to the full suite, check image and text previews,
+keyboard focus across refreshes, unavailable-file states and document saving in
+the native window. Neither Markdown nor HTML/SVG file content may become active
+markup. Signature checks do not constitute full image decoding, and text
+redaction is not a complete secret detector.
+
+Live presents lifecycle status separately from recorded evidence. Runtime notices
+must remain distinguishable from human instructions and must not displace useful
+command or response activity. Relevant suites include `content.test.mjs`,
+`artifacts.test.mjs`, `artifact-view.test.mjs`, `details.test.mjs`,
+`native-download.test.mjs`, `inspector.test.mjs`, `live-view.test.mjs` and
+`browser-view.test.mjs`. Record actual execution and UI evidence in the
+[v0.11 verification notes](VERIFICATION.md#v011-files-and-readable-live--2026-10-20).
 
 ## Repository hygiene
 

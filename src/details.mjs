@@ -2,6 +2,7 @@ import { realpath, stat } from "node:fs/promises";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import { archiveContent, localContent } from "./session-content.mjs";
 import { readTailRecords } from "./util.mjs";
+import { createArtifactService } from "./artifacts.mjs";
 
 const PAGE_SIZE = 40;
 const TAIL_BYTES = 1024 * 1024;
@@ -9,8 +10,10 @@ const MAX_RESPONSE = 4 * 1024 * 1024;
 const privateContext = (path = "") => /(?:^|[/\\])body-os(?:[/\\]|$)/i.test(path);
 const resolvedPrivateContext = async (path) => privateContext(path) || Boolean(path && privateContext(await realpath(path).catch(() => path)));
 const inside = (path, root) => { const r = relative(root, path); return r !== ".." && !r.startsWith(`..${sep}`) && !isAbsolute(r); };
+const fileVersion = (st) => `${st.dev}:${st.ino}:${st.size}:${st.mtimeMs}:${st.ctimeMs}`;
 
 export function createDetailsService(config, { fetcher = fetch, now = Date.now } = {}) {
+  const artifacts = createArtifactService(config, { now });
   const cache = new Map();
   const pending = new Map();
   function remember(key, value) {
@@ -37,11 +40,14 @@ export function createDetailsService(config, { fetcher = fetch, now = Date.now }
       if (!st.isFile()) return { state: "unavailable", entries: [], activity: null };
       const key = `local:${file}`;
       const hit = cache.get(key);
-      if (hit?.size === st.size && hit.mtime === st.mtimeMs) return hit.value;
+      if (hit?.version === fileVersion(st)) return hit.value;
       const records = await readTailRecords(file, st.size, TAIL_BYTES);
+      const [after, resolved] = await Promise.all([stat(file), realpath(path)]);
+      if (resolved !== file || fileVersion(after) !== fileVersion(st)) return { state: "unavailable", entries: [], activity: null };
       const content = localContent(records, n.agent);
-      const value = { ...content, state: "available", updatedAt: st.mtime.toISOString(), truncated: st.size > TAIL_BYTES || content.truncated };
-      remember(key, { size: st.size, mtime: st.mtimeMs, value });
+      const value = { ...content, state: "available", updatedAt: st.mtime.toISOString(), truncated: st.size > TAIL_BYTES || content.truncated,
+        sourceIdentity: { path: file, dev: String(st.dev), ino: String(st.ino) } };
+      remember(key, { version: fileVersion(st), value });
       return value;
     } catch { return { state: "unavailable", entries: [], activity: null }; }
   }
@@ -94,7 +100,7 @@ export function createDetailsService(config, { fetcher = fetch, now = Date.now }
       const rows = data.messages.slice(0, PAGE_SIZE);
       const ordinals = rows.map((m) => m.ordinal).filter((v) => Number.isSafeInteger(v) && v >= 0);
       const oldest = ordinals.length ? Math.min(...ordinals) : 0;
-      const value = { state: "available", entries: archiveContent(rows), hasMore: rows.length === PAGE_SIZE && oldest > 0, before: oldest > 0 ? oldest - 1 : null, revision: typeof data.transcript_revision === "string" ? data.transcript_revision : null };
+      const value = { state: "available", entries: archiveContent(rows, n.agent), hasMore: rows.length === PAGE_SIZE && oldest > 0, before: oldest > 0 ? oldest - 1 : null, revision: typeof data.transcript_revision === "string" ? data.transcript_revision : null };
       remember(key, { at: now(), value });
       return value;
     } catch (error) {
@@ -105,19 +111,36 @@ export function createDetailsService(config, { fetcher = fetch, now = Date.now }
     }
   }
 
-  return {
+  const publicContent = (content) => {
+    if (!content) return content;
+    const { sourceIdentity, branch, ...visible } = content;
+    return { ...visible, entries: (content.entries ?? []).map(({ artifactCandidates, ...entry }) => entry) };
+  };
+  const service = {
     async get(n, { before = null, revision = null } = {}) {
       if (await resolvedPrivateContext(n.cwd) || privateContext(n.source) || privateContext(n.transcript)) {
-        return { id: n.id, observedAt: new Date(now()).toISOString(), local: { state: "restricted", entries: [], activity: null }, archive: { state: "restricted", entries: [], hasMore: false } };
+        artifacts.revoke(n.id);
+        return { id: n.id, observedAt: new Date(now()).toISOString(), local: { state: "restricted", entries: [], activity: null }, archive: { state: "restricted", entries: [], hasMore: false }, artifacts: [], artifactState: "available" };
       }
       const key = JSON.stringify([n.id, n.source, n.transcript, n.cwd, n.agentsviewId, before, revision]);
       if (pending.has(key)) return pending.get(key);
       if (pending.size >= 8) throw Object.assign(new Error("Inspector busy; retry shortly"), { status: 503 });
       const work = Promise.all([before === null ? local(n) : Promise.resolve(null), archive(n, before, revision)])
-        .then(([local, archive]) => ({ id: n.id, observedAt: new Date(now()).toISOString(), local, archive }))
+        .then(async ([local, archive]) => {
+          let files = [], artifactState = "available";
+          try { files = await artifacts.register(n, { local, archive }); }
+          catch { artifacts.revoke(n.id); artifactState = "unavailable"; }
+          return { id: n.id, observedAt: new Date(now()).toISOString(), local: publicContent(local), archive: publicContent(archive), artifacts: files, artifactState };
+        })
         .finally(() => pending.delete(key));
       pending.set(key, work);
       return work;
     },
+    async artifact(n, id, options = {}) {
+      // Refresh identity/revision revocations before serving retained evidence.
+      await service.get(n);
+      return artifacts.read(n, id, options);
+    },
   };
+  return service;
 }

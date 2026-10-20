@@ -17,15 +17,31 @@ test("tail-only returns invalidate inherited execution state while preserving th
   }
 });
 
+test("matching archive and local notices are shown once without merging them with user text", () => {
+  const archived = { id: "archive-notice:1", kind: "notice", label: "Background task stopped", text: "Completion was not confirmed.", noticeStatus: "stopped", at: "2026-10-20T12:00:00Z" };
+  const local = { ...archived, id: "notice:local", at: "2026-10-20T12:00:01Z" };
+  const user = { id: "user", kind: "message", role: "user", text: archived.text, at: archived.at };
+  const entries = mergeContent([archived], [local, user]);
+  assert.equal(entries.length, 2);
+  assert.equal(entries.find((entry) => entry.kind === "notice").origin, "local");
+  assert.equal(entries.find((entry) => entry.kind === "notice").id, archived.id);
+  assert.equal(entries.find((entry) => entry.kind === "message").role, "user");
+  assert.equal(mergeContent([archived], [{ ...local, noticeStatus: "failed" }]).length, 2);
+});
+
 const response = (id, text, extra = {}) => new Response(JSON.stringify({
   id, local: { state: "available", entries: [{ id: text, kind: "message", role: "assistant", text, final: true, at: "2026-10-16T12:00:00Z" }], activity: { label: "Posted a response", detail: text } },
   archive: { state: "not-indexed", entries: [], hasMore: false }, ...extra,
 }));
 function root() {
   const thread = { scrollTop: 0, scrollHeight: 1000, clientHeight: 500 };
+  const artifacts = {
+    innerHTML: "", scrollTop: 0, hidden: true,
+    querySelectorAll: () => [], addEventListener() {}, removeEventListener() {}, replaceWith() {},
+  };
   return {
-    innerHTML: "", handler: null, thread,
-    querySelector: () => thread, querySelectorAll: () => [],
+    innerHTML: "", handler: null, thread, artifacts,
+    querySelector: (selector) => selector === ".session-artifacts" ? artifacts : thread, querySelectorAll: () => [],
     addEventListener(_, fn) { this.handler = fn; },
     click(dataset = {}, attribute = null) { this.handler({ target: { closest: () => ({ dataset, hasAttribute: (a) => a === attribute }) } }); },
   };
@@ -55,6 +71,38 @@ test("Live receives selected-session evidence and updates status before another 
   assert.equal(updates.at(-1).context.entries.at(-1).text, "RECORDED REPLY");
   inspector.select("a", "Done", { title: "Synthetic session", status: "done" });
   assert.equal(updates.at(-1).context.session.status, "done");
+});
+
+test("Live hides the duplicate activity summary and Chat restores it", async (t) => {
+  const r = root();
+  const inspector = createInspector(r, { fetcher: async () => response("a", "RECORDED REPLY"), browserView: { select() {}, destroy() {} } });
+  t.after(() => inspector.destroy());
+  inspector.select("a");
+  await setImmediate();
+  assert.match(r.innerHTML, /class="current-activity"/);
+  inspector.showTab("live");
+  assert.doesNotMatch(r.innerHTML, /class="current-activity"/);
+  inspector.showTab("chat");
+  assert.match(r.innerHTML, /class="current-activity"/);
+});
+
+test("Chat distinguishes runtime notices from genuine user instructions and excludes them from Results", async (t) => {
+  const r = root();
+  const inspector = createInspector(r, { fetcher: async () => response("a", "unused", {
+    local: { state: "available", entries: [
+      { id: "user", kind: "message", role: "user", text: "Run the build.", at: "2026-10-20T12:00:00Z" },
+      { id: "notice", kind: "notice", label: "Background commands stopped", text: "Completion was not confirmed.", at: "2026-10-20T12:00:01Z" },
+    ] },
+  }) });
+  t.after(() => inspector.destroy());
+  inspector.select("a");
+  await setImmediate();
+  assert.match(r.innerHTML, /<b>You<\/b>/);
+  assert.match(r.innerHTML, /<b>Session notice<\/b>/);
+  assert.match(r.innerHTML, /Background commands stopped/);
+  assert.doesNotMatch(r.innerHTML, /<b>Agent<\/b>/);
+  inspector.showTab("results");
+  assert.doesNotMatch(r.innerHTML, /data-entry="notice"/);
 });
 
 test("restricted refreshes revoke previously retained local and archive evidence", async (t) => {
@@ -226,4 +274,106 @@ test("empty archives becoming indexed expose the new pagination cursor", async (
   t.mock.timers.tick(4000);
   await setImmediate();
   assert.ok(r.innerHTML.includes("fill the gap"));
+});
+
+test("Results retains one Files view across polls and tab changes while registry replacements remain authoritative", async (t) => {
+  t.mock.timers.enable({ apis: ["setInterval"] });
+  const previousDocument = globalThis.document;
+  globalThis.document = { hidden: false };
+  t.after(() => { globalThis.document = previousDocument; });
+  const r = root(), updates = [], created = [];
+  let revision = 0;
+  const files = [{ id: "file-a", name: "report.txt", kind: "text", state: "available", associations: [] }];
+  const inspector = createInspector(r, {
+    fetcher: async () => response("a", "EXISTING RESULT", { artifacts: revision ? [] : files, artifactState: "available",
+      archive: { state: "available", entries: [], revision: `revision-${revision}`, hasMore: false } }),
+    artifactViewFactory(element) {
+      created.push(element);
+      return { select: (id, artifacts, context) => updates.push({ id, artifacts, context }), destroy() {} };
+    },
+  });
+  t.after(() => inspector.destroy());
+  inspector.select("a"); inspector.showTab("results");
+  await setImmediate();
+  assert.equal(created.length, 1);
+  assert.deepEqual(updates.at(-1).artifacts, files);
+  assert.equal(r.artifacts.hidden, false);
+  assert.match(r.innerHTML, /EXISTING RESULT/);
+  inspector.showTab("live");
+  assert.equal(r.artifacts.hidden, true);
+  inspector.showTab("results");
+  t.mock.timers.tick(4000); await setImmediate();
+  assert.equal(created.length, 1);
+  assert.deepEqual(updates.at(-1).artifacts, files);
+  revision++;
+  t.mock.timers.tick(4000); await setImmediate();
+  assert.deepEqual(updates.at(-1).artifacts, []);
+});
+
+test("Files retain metadata on a request error but revoke it on registry failure and restriction", async (t) => {
+  const r = root(), updates = [];
+  let mode = "available";
+  const files = [{ id: "file-a", name: "report.txt", kind: "text", state: "available" }];
+  const inspector = createInspector(r, {
+    fetcher: async () => mode === "request-error" ? new Response("unavailable", { status: 503 }) : response("a", "RESPONSE", {
+      artifacts: mode === "available" ? files : [], artifactState: mode === "unavailable" ? "unavailable" : "available",
+      ...(mode === "restricted" ? { local: { state: "restricted", entries: [] }, archive: { state: "restricted", entries: [], hasMore: false } } : {}),
+    }),
+    artifactViewFactory() { return { select: (id, artifacts, context) => updates.push({ id, artifacts, context }), destroy() {} }; },
+  });
+  t.after(() => inspector.destroy());
+  inspector.select("a"); inspector.showTab("results"); await setImmediate();
+  mode = "request-error"; r.click({}, "data-inspector-refresh"); await setImmediate();
+  assert.deepEqual(updates.at(-1).artifacts, files);
+  assert.equal(updates.at(-1).context.error, true);
+  mode = "unavailable"; r.click({}, "data-inspector-refresh"); await setImmediate();
+  assert.deepEqual(updates.at(-1).artifacts, []);
+  assert.equal(updates.at(-1).context.error, true);
+  mode = "available"; r.click({}, "data-inspector-refresh"); await setImmediate();
+  assert.deepEqual(updates.at(-1).artifacts, files);
+  mode = "restricted"; r.click({}, "data-inspector-refresh"); await setImmediate();
+  assert.deepEqual(updates.at(-1).artifacts, []);
+  assert.equal(updates.at(-1).context.restricted, true);
+  inspector.select("next");
+  assert.deepEqual(updates.at(-1).artifacts, []);
+});
+
+test("inspector restores logical file focus after its surrounding markup and file metadata change", async (t) => {
+  const r = root(), phases = [];
+  let markup = "", focused = null, liveControl = null, revision = 0;
+  Object.defineProperty(r, "innerHTML", {
+    get: () => markup,
+    set(value) { markup = value; focused = null; phases.push("detached"); },
+  });
+  const inspector = createInspector(r, {
+    fetcher: async () => response("a", "RESPONSE", {
+      artifacts: [{ id: "file-a", name: `revision-${revision}.txt`, kind: "text", state: "available" }],
+    }),
+    artifactViewFactory() {
+      return {
+        captureFocus() {
+          phases.push("capture");
+          return focused ? { sessionId: "a", fileId: "file-a", control: ".artifact-text" } : null;
+        },
+        select() { liveControl = {}; phases.push("reconciled"); },
+        restoreFocus(saved) {
+          phases.push("restore");
+          if (saved) {
+            assert.deepEqual(saved, { sessionId: "a", fileId: "file-a", control: ".artifact-text" });
+            focused = liveControl;
+          }
+        },
+        destroy() {},
+      };
+    },
+  });
+  t.after(() => inspector.destroy());
+  inspector.select("a"); inspector.showTab("results"); await setImmediate();
+  focused = liveControl;
+  const original = focused;
+  phases.length = 0;
+  revision++; r.click({}, "data-inspector-refresh"); await setImmediate();
+  assert.deepEqual(phases, ["capture", "detached", "reconciled", "restore"]);
+  assert.equal(focused, liveControl);
+  assert.notEqual(focused, original);
 });

@@ -20,6 +20,7 @@ export function createBrowserView(root, { eventSource = (url) => new EventSource
   let status = { state: "connecting" };
   let receivedAt = 0;
   let decodedAt = 0;
+  let setupSignature = "";
   const labels = { connecting: "Connecting…", loading: "Page loading…", live: "Live", disconnected: "Disconnected · reconnecting…", stopped: "Browser stopped", unavailable: "No browser attached", restricted: "Live view unavailable for this context", blocked: "This page URL cannot be viewed", paused: "Paused while this tab is hidden" };
 
   function clearImage() {
@@ -37,8 +38,16 @@ export function createBrowserView(root, { eventSource = (url) => new EventSource
     root.querySelector(".browser-location").textContent = status.url ?? "Terminal browser";
     root.querySelector(".browser-placeholder").hidden = Boolean(current);
     root.querySelector(".browser-placeholder").textContent = labels[state];
-    root.querySelector(".browser-help").innerHTML = status.startCommand && state === "unavailable"
-      ? `<p>Supported agent browsers appear here automatically. You can also start a separate terminal browser for this session.</p><button data-copy="${esc(status.startCommand)}">Copy browser start command</button>` : "";
+    const setup = root.querySelector(".browser-setup");
+    // Keep the optional setup expanded, and its focused button intact, while
+    // unavailable browsers reconnect in the background.
+    if (state === "unavailable" && status.startCommand) {
+      if (setupSignature !== status.startCommand) {
+        setupSignature = status.startCommand;
+        root.querySelector(".browser-help").innerHTML = `<p>Supported browsers appear automatically. To attach a separate browser, copy this command and run it in a terminal.</p><button data-copy="${esc(status.startCommand)}">Copy browser start command</button>`;
+      }
+      setup.hidden = false;
+    } else if (current || state === "restricted" || state === "blocked") setup.hidden = true;
     const click = status.clicks?.at(-1);
     root.querySelector(".browser-caption").textContent = current
       ? `Read-only${status.mode === "attached" ? " · existing agent browser" : ""} · last image ${clock(current.at)}${click ? ` · click observed ${clock(click.at)}` : ""}`
@@ -140,13 +149,13 @@ export function createBrowserView(root, { eventSource = (url) => new EventSource
   return {
     select(nextId) {
       if (nextId === id) return;
-      disconnect(); id = nextId; viewId = null;
+      disconnect(); id = nextId; viewId = null; setupSignature = "";
       root.hidden = !id;
       if (!id) { root.innerHTML = ""; onState({ id: null, state: "unavailable", hasFrame: false, at: null }); return; }
       root.innerHTML = `<div class="browser-sources" hidden><label>Browser view <select class="browser-picker" aria-label="Browser view"></select></label></div>
         <div class="browser-toolbar"><strong class="browser-state"></strong><span class="browser-location"></span></div>
         <div class="browser-screen"><img class="browser-image" alt="Live view of the selected terminal browser" draggable="false"/><div class="browser-clicks" aria-hidden="true"></div><p class="browser-placeholder"></p></div>
-        <p class="browser-caption"></p><div class="browser-help"></div>`;
+        <p class="browser-caption"></p><details class="browser-setup" hidden><summary>Browser setup</summary><div class="browser-help"></div></details>`;
       root.querySelector(".browser-picker").onchange = (event) => {
         if (!/^[a-f0-9-]{1,64}$/.test(event.target.value)) return;
         disconnect(); viewId = event.target.value; connect();

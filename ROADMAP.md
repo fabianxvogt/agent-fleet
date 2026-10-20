@@ -1,10 +1,10 @@
 # Roadmap
 
 ## Now
-- v0.10.0 adds automatic Live selection: a fresh supported browser image, observed terminal output, or the latest agent activity and timestamp. Large graphs now use compact overviews and visible detail. Validate daily runtime coverage and freshness; agentsview remains the background archive.
+- v0.11.0 adds Files in Results and a clearer Live view: current status, recorded work and readable background notices are separate. Validate file associations and everyday Live coverage across supported runtimes; agentsview remains the background archive.
 
 ## Next
-- **v0.11 artifact previews:** Files in Results, raster images, escaped text/code previews and explicit document downloads, with session-bound access and useful missing/restricted states. Preserve previews across polling and work in the native app. [Design and acceptance checks](docs/ARTIFACTS.md); current Results still displays text/tool outputs and agent responses.
+- **File coverage:** validate supported links/writes in everyday work. External output folders need an explicit access contract; Pi/OMP/fleet archive artifacts need verified branch identity before inclusion. Embedded document rendering remains a later extension. [Current behavior and limits](docs/ARTIFACTS.md).
 - **Everyday Live coverage:** validate shell output and browser discovery across actual supported agent workflows. Log polling cannot display output before the runtime records it; generic orchestration calls remain tool activity. Keep old observations explicit and add runtime formats only with evidence.
 - **Large-graph follow-up:** the synthetic 3,000-level chain now supports overview, readable zoom and selection. Continue checking wide graphs and sustained updates; culling reduces drawing, while layout still processes the matching graph. [Evidence](docs/VERIFICATION.md#v010-automatic-live-and-graph-rendering--2026-10-20).
 - **Sustained freshness:** continue daily freshness checks using process-stage timings for outliers. The latest 60 health samples were current; finite samples do not establish an uptime guarantee.
@@ -25,6 +25,12 @@
 - Remote machines over SSH (same adapters, remote `ps`/`lsof`).
 
 ## Done
+- 2026-10-20 v0.11 files and readable Live (`INCREMENTAL / EMPIRICAL`):
+  - Files in Results previews supported raster images and escaped text/code, with explicit document downloads and useful unavailable states
+  - bounded, session-bound file access revalidates workspace, source, branch, revision and file identity; open previews and reading position survive ordinary polling
+  - native downloads use a save dialog, preserve the dashboard and publish the destination only after a complete transfer
+  - Live distinguishes current lifecycle from recorded work; Claude background notifications become readable notices, useful output stays visible, and browser setup is collapsed
+  - synthetic regressions, independent backend/UI/native reviews and browser/native checks; [verification and limits](docs/VERIFICATION.md#v011-files-and-readable-live--2026-10-20)
 - 2026-10-20 v0.10 automatic Live and graph rendering (`INCREMENTAL / EMPIRICAL`):
   - fresh browser images take priority; recorded commands/output and agent activity fill the view when no image is available, with observation times and explicit errors/stale states
   - validated shell metadata distinguishes pending, observed-running, completed and failed commands; continuation results supersede historical process state

@@ -14,7 +14,8 @@ Agent Fleet reads sessions from **Claude Code, Codex, OhMyPi, Pi and pi-agent-fl
 - **Attention and status:** separate input requests, failures and recently completed replies. Inferred questions are labeled.
 - **Source freshness:** show observation ages and source failures. Sources update independently; unavailable sources retain a labeled last-known view for up to two minutes.
 - **Session inspector:** read recent chat and tool results. An optional [agentsview](https://github.com/kenn-io/agentsview) service supplies older history.
-- **Automatic Live view:** prioritize a supported browser image, then observed terminal commands/output, then the latest agent activity. Keep the last known activity visible with its timestamp when fresh data is unavailable.
+- **Automatic Live view:** prioritize a supported browser image, then observed terminal commands/output, then the latest agent activity. Show current session status separately from recorded work; readable background notices keep internal runtime markup out of the way.
+- **Files in Results:** preview linked images and text/code, or download supported documents. Files stay associated with their session; missing or restricted files have explicit states.
 - **Native Mac window:** install a standalone dashboard window and login startup, backed by the same local service.
 
 ## Quick start
@@ -82,6 +83,8 @@ Automatic browser discovery requires a supported dedicated Chromium profile, an 
 
 Terminal output comes from recorded session logs, refreshed every four seconds while selected; it is not a direct terminal screen stream. Pending, observed-running and finished commands are distinguished, and older observations are labeled.
 
+File access requires an explicit supported link or successful file-writing action inside the session's workspace. The dashboard does not scan project directories or fetch remote links. Image/text previews and document downloads have size and access limits; see [file previews](docs/ARTIFACTS.md).
+
 Status recognition follows each runtime's recorded events. Pi/OMP activity can still rely on file recency, and OpenCode currently has process metadata only. A completed reply can leave its session idle; it does not necessarily mean the session ended. Source freshness is shown separately from session status.
 
 Large graphs use compact status cards in the overview and render detailed cards near the visible area when zoomed in. Select an overview card to zoom to it; List, filters and Collapse finished remain useful for navigating large projects. A synthetic 3,000-level chain is verified; this is not a guarantee for every graph or device. See the [measured limits](docs/VERIFICATION.md#v010-automatic-live-and-graph-rendering--2026-10-20).
@@ -96,10 +99,11 @@ Tests use Node's built-in runner and synthetic fixtures. Browser integration tes
 
 - [Usage guide](docs/USAGE.md): views, filters, status meanings, freshness and navigation.
 - [Browser views](docs/BROWSER.md): discovery, terminal commands and supported integrations.
+- [File previews](docs/ARTIFACTS.md): associations, supported formats, access and limits.
 - [Mac app](docs/DESKTOP.md): installation, startup and removal.
 - [Development guide](docs/DEVELOPMENT.md): repository structure and checks.
 - [Adapter development](docs/ADAPTERS.md): add a session source.
 - [Verification notes](docs/VERIFICATION.md): measured behavior, checks and remaining limits.
 - [Roadmap](ROADMAP.md): completed work and next steps.
 
-**Current version: v0.10.0.** This is an evolving local tool, classified as **INCREMENTAL / EMPIRICAL** engineering. Compatibility and performance are backed by the documented checks, not a guarantee for every agent version or host workload.
+**Current version: v0.11.0.** This is an evolving local tool, classified as **INCREMENTAL / EMPIRICAL** engineering. Compatibility and performance are backed by the documented checks, not a guarantee for every agent version or host workload.

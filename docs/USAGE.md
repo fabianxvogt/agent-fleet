@@ -60,26 +60,38 @@ For an installed service, logs are at `~/.agent-fleet/logs/agent-fleet.log`. Ser
 
 ## Session inspector
 
-Select a node or list row to open its inspector. Activity includes its observation time. **Chat** shows messages and tool calls; **Results** shows returned tool outputs and agent replies. Expand a tool to inspect its input/output. Technical metadata and relations are under **Session details & relations**.
+Select a node or list row to open its inspector. Activity includes its observation time. **Chat** shows messages and tool calls; **Results** shows returned tool outputs, agent replies and associated files. Expand a tool to inspect its input/output. Technical metadata and relations are under **Session details & relations**.
 
 Only the selected session's content refreshes, every four seconds while the dashboard tab is visible. Recent content comes from local logs. **Load earlier messages** requests archive history from the configured agentsview service; the refresh control reloads it. If agentsview is unavailable or the session is not indexed, recent local events remain readable. OpenCode process-only nodes currently have no transcript reader.
 
 Content availability follows the runtime's recorded events. The inspector excludes private thinking/reasoning and system records; it displays text rather than executing log content. Credential redaction is a secondary defense, not a guarantee that all sensitive text is removed.
 
+### Files in Results
+
+The **Files** section contains files explicitly linked in an assistant reply or written by a supported successful tool. Expand a file to see its size, modification time and association. **Linked in response** does not mean that the session created it.
+
+PNG, JPEG, GIF and WebP files have image previews. Text, code, Markdown and JSON have readable text previews; HTML and SVG are shown as text. Long text is limited to 64 KiB with a truncation notice. PDF, Word, Excel and PowerPoint documents offer **Download**; in the Mac app, choose the destination in its save dialog. Images and downloads are limited to 8 MiB.
+
+Only files within the selected session's workspace are eligible. Protected, missing, changed, oversized and unsupported files show an explanation. Opening a file does not scan the project or follow remote links. Open previews and reading position survive ordinary updates; changing session clears the previous selection. References are bounded and can expire, so use the inspector refresh control to check for newly observed references.
+
+Supported association formats, retention and access boundaries are documented in [Session artifact previews](ARTIFACTS.md).
+
 ### Automatic Live
 
-Choose **Live** in any selected session's inspector. It automatically shows the most useful available evidence:
+Choose **Live** in any selected session's inspector. Its heading states the current session lifecycle, such as **Agent is working**, **Agent is idle** or **Agent needs your input**. Retained source data is labeled **Last known status**. The content underneath automatically shows the most useful available evidence:
 
 1. A fresh image from a supported browser.
 2. A recent observed terminal command, with its working directory and output.
 3. The latest tool action, agent response or session activity.
 4. The last known observation with its timestamp, or the session status while content loads.
 
-Commands distinguish waiting for output, running when last observed, completion and failure. Output updates when the runtime writes it to the session log; the inspector polls every four seconds while visible. It does not stream the terminal screen or expose private reasoning. Refresh failures and old observations are labeled; a frozen or unavailable browser image gives way to recorded activity.
+Commands distinguish waiting for output, running when last observed, completion and failure. Recorded activity shows its date and time; a previous command is not proof that it is still running. Output updates when the runtime writes it to the session log; the inspector polls every four seconds while visible. It does not stream the terminal screen or expose private reasoning. Refresh failures and old observations are labeled; a frozen or unavailable browser image gives way to recorded activity.
+
+Supported Claude background-task notifications appear as readable **Session notices**, including when a command was marked stopped without confirmed completion. They remain secondary to meaningful command or response activity. The recognized runtime envelope is not displayed as raw XML or mislabeled **Latest instruction**; quoted examples and ordinary user messages remain messages. Other runtime notification formats may still need support.
 
 A gold **LIVE** badge opens an available browser directly. Supported dedicated Chromium pages appear automatically when ownership is unambiguous. **Browser view** switches between multiple pages associated with a session. Multiple sessions can have available views at once.
 
-The dashboard observes the selected page while the terminal agent retains control. Switching away or hiding the dashboard stops capture; the browser continues running. Optional terminal commands create a separate managed browser or attach an explicit existing browser. Private-pipe-only tools require another integration. See [browser commands and boundaries](BROWSER.md).
+The dashboard observes the selected page while the terminal agent retains control. Switching away or hiding the dashboard stops capture; the browser continues running. When no supported browser is available, optional browser setup stays collapsed so recorded activity remains easy to read. Expand it to copy the command for a separate managed browser; terminal commands can also attach an explicit existing browser. Private-pipe-only tools require another integration. See [browser commands and boundaries](BROWSER.md).
 
 ## Graph navigation
 

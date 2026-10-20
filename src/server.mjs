@@ -8,7 +8,7 @@ import { watchPilot } from "./browser/pilot.mjs";
 import { createBrowserCatalog, withBrowserPresence } from "./browser/presence.mjs";
 
 const UI_DIR = fileURLToPath(new URL("../ui/", import.meta.url));
-const STATIC = { "/": "index.html", "/app.js": "app.js", "/inspector.js": "inspector.js", "/browser-view.js": "browser-view.js", "/live-view.js": "live-view.js", "/browser-demo": "browser-demo.html", "/browser-demo.js": "browser-demo.js", "/layout.js": "layout.js", "/graph-scene.js": "graph-scene.js", "/style.css": "style.css", "/favicon.svg": "favicon.svg" };
+const STATIC = { "/": "index.html", "/app.js": "app.js", "/inspector.js": "inspector.js", "/artifact-view.js": "artifact-view.js", "/browser-view.js": "browser-view.js", "/live-view.js": "live-view.js", "/browser-demo": "browser-demo.html", "/browser-demo.js": "browser-demo.js", "/layout.js": "layout.js", "/graph-scene.js": "graph-scene.js", "/style.css": "style.css", "/favicon.svg": "favicon.svg" };
 const TYPES = { ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8", ".svg": "image/svg+xml" };
 
 export async function serve(config, adapters) {
@@ -91,6 +91,7 @@ function json(res, body, cache = "no-cache") {
 /** HTTP surface separated from collection so integration tests use synthetic sessions. */
 export function createDashboardServer(collector, details, { clients = new Set(), withExtras = (s) => s, browserConfig = null, browsers = null } = {}) {
   const browserViewers = new Set();
+  let artifactRequests = 0;
   const health = () => collector.health?.() ?? snapshotHealth(collector.latest());
   const sendHealth = (data) => {
     const payload = `event: health\ndata: ${JSON.stringify(data)}\n\n`;
@@ -119,7 +120,7 @@ export function createDashboardServer(collector, details, { clients = new Set(),
           res.writeHead(403).end("forbidden");
           return;
         }
-        const match = /^\/api\/sessions\/([^/]+)\/(details|browser\/events)$/.exec(url.pathname);
+        const match = /^\/api\/sessions\/([^/]+)\/(details|browser\/events|artifacts\/([a-f0-9-]{16,64})\/(preview|download))$/.exec(url.pathname);
         if (!match) { res.writeHead(404).end("not found"); return; }
         let id;
         try { id = decodeURIComponent(match[1]); }
@@ -132,6 +133,44 @@ export function createDashboardServer(collector, details, { clients = new Set(),
         if (!collector.latest()) await collector.ready();
         const n = collector.latest()?.nodes.find((n) => n.id === id);
         if (!n) { res.writeHead(404).end("session not found"); return; }
+        if (match[3]) {
+          if (!details.artifact) { res.writeHead(404).end("not found"); return; }
+          if (artifactRequests >= 8) { res.writeHead(503).end("artifact service busy"); return; }
+          artifactRequests++;
+          try {
+            const download = match[4] === "download";
+            const file = await details.artifact(n, match[3], { download });
+            res.setHeader("content-security-policy", "default-src 'none'; sandbox");
+            if (download) {
+              if (file.state !== "available" || !Buffer.isBuffer(file.body)) {
+                res.writeHead(({ restricted: 403, missing: 404, changed: 409, expired: 410, oversized: 413, unsupported: 415 })[file.state] ?? 503, { "content-type": "application/json; charset=utf-8" });
+                res.end(JSON.stringify({ state: file.state ?? "unavailable" }));
+                return;
+              }
+              const name = String(file.filename ?? file.name ?? "download").toWellFormed();
+              const fallback = name.replace(/[^a-zA-Z0-9._ -]/g, "_").slice(0, 120) || "download";
+              const encoded = encodeURIComponent(name).replace(/['()*]/g, (c) => `%${c.charCodeAt(0).toString(16).toUpperCase()}`);
+              res.writeHead(200, {
+                "content-type": "application/octet-stream",
+                "content-disposition": `attachment; filename="${fallback}"; filename*=UTF-8''${encoded}`,
+                "content-length": file.body.length,
+              });
+              res.end(file.body);
+            } else {
+              const value = { state: file.state, kind: file.kind, name: file.name };
+              if (file.state === "available") {
+                if (file.kind === "text" && typeof file.body === "string") {
+                  value.text = file.body;
+                  value.truncated = Boolean(file.truncated);
+                } else if (file.kind === "image" && Buffer.isBuffer(file.body) && ["image/png", "image/jpeg", "image/gif", "image/webp"].includes(file.contentType)) {
+                  value.image = `data:${file.contentType};base64,${file.body.toString("base64")}`;
+                }
+              }
+              json(res, value, "no-store");
+            }
+          } finally { artifactRequests--; }
+          return;
+        }
         if (match[2] === "browser/events") {
           if (browserViewers.size >= 8) { res.writeHead(503).end("too many browser viewers"); return; }
           res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-store", connection: "keep-alive" });

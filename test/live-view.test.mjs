@@ -45,8 +45,8 @@ test("latest non-terminal tools, responses, activity events and metadata provide
   const read = { id: "read", kind: "tool", name: "read_file", input: "demo.txt", text: "example", at: at(1000) };
   assert.equal(liveActivity(context([terminal("one", "exited"), read]), NOW + 1000).kind, "tool");
   assert.equal(liveActivity(context([], { activity: { label: "Turn started", at: at() } }), NOW).label, "Turn started");
-  assert.equal(liveActivity(context([]), NOW).label, "Agent is working");
-  assert.equal(liveActivity(context([], { loading: true }), NOW).label, "Loading observed activity…");
+  assert.equal(liveActivity(context([]), NOW).label, "No recorded activity yet");
+  assert.equal(liveActivity(context([], { loading: true }), NOW).label, "Loading recorded activity…");
   const restricted = liveActivity(context([terminal()], { localState: "restricted" }), NOW);
   assert.equal(restricted.kind, "restricted");
   assert.ok(!JSON.stringify(restricted).includes("npm test"));
@@ -101,7 +101,8 @@ test("selection clears old fallback data and late browser callbacks cannot repla
   f.notify({ id: "old", state: "live", hasFrame: true });
   assert.equal(f.el(".live-source-label").textContent, "Agent activity");
   assert.doesNotMatch(f.el(".live-fallback").innerHTML, /npm test/);
-  assert.match(f.el(".live-fallback").innerHTML, /New session/);
+  assert.equal(f.el(".live-status-label").textContent, "Agent is idle");
+  assert.match(f.el(".live-fallback").innerHTML, /No recorded activity yet/);
   f.view.select(null);
   assert.equal(f.root.hidden, true);
   assert.deepEqual(f.selections, ["old", "new", null]);
@@ -136,4 +137,62 @@ test("a restricted context suppresses both previous content and a browser frame"
   f.view.select("a", context());
   assert.deepEqual(f.selections, ["a", null, "a"]);
   assert.equal(f.el(".live-browser").dataset.hasFrame, "false", "recovery waits for a new frame");
+});
+
+const notice = {
+  id: "notice", kind: "notice", label: "Background commands stopped",
+  text: "4 background commands were marked stopped after the previous session ended. Completion was not confirmed.",
+  at: at(2000), noticeStatus: "stopped",
+};
+
+test("session notices stay secondary to useful evidence and never become instructions", () => {
+  const reply = { id: "reply", kind: "message", role: "assistant", text: "The build is ready.", at: at(1000) };
+  const activity = { kind: "notice", label: notice.label, detail: notice.text, at: notice.at };
+  const result = liveActivity(context([reply, notice], { activity, session: { status: "idle" } }), NOW + 2000);
+  assert.equal(result.label, "Latest agent response");
+  assert.equal(result.detail, "The build is ready.");
+  assert.equal(result.notice.label, notice.label);
+  const alone = liveActivity(context([notice], { activity, session: { status: "idle" } }), NOW + 2000);
+  assert.equal(alone.kind, "notice");
+  assert.equal(alone.detail, notice.text);
+  assert.equal(alone.notice, undefined);
+  const instruction = liveActivity(context([{ id: "user", kind: "message", role: "user", text: "Run the build.", at: at() }]), NOW);
+  assert.equal(instruction.label, "Latest instruction");
+  assert.equal(instruction.notice, null);
+  const updatedNotice = liveActivity(context([notice], {
+    activity: { kind: "notice", label: "Background task completed", detail: "The task completed.", at: at(3000) },
+  }), NOW + 3000);
+  assert.equal(updatedNotice.label, "Background task completed");
+  assert.equal(updatedNotice.detail, "The task completed.");
+});
+
+test("Live distinguishes current idle state from the recorded work and renders notices separately", (t) => {
+  const f = fixture(t);
+  const idle = context([terminal(), notice], { session: { status: "idle" } });
+  f.view.select("a", idle);
+  assert.equal(f.el(".live-status-label").textContent, "Agent is idle");
+  assert.match(f.el(".live-fallback").innerHTML, /Recorded /);
+  assert.doesNotMatch(f.el(".live-fallback").innerHTML, /Running when last observed/);
+  assert.equal(f.el(".live-notice").hidden, false);
+  assert.match(f.el(".live-notice").innerHTML, /Session notice/);
+  assert.match(f.el(".live-notice").innerHTML, /Completion was not confirmed/);
+  f.view.select("a", { ...idle, session: { status: "working" } });
+  assert.equal(f.el(".live-status-label").textContent, "Agent is working");
+  f.notify({ id: "a", state: "live", hasFrame: true });
+  assert.equal(f.el(".live-notice").hidden, true);
+  f.notify({ id: "a", state: "disconnected", hasFrame: false });
+  assert.equal(f.el(".live-notice").hidden, false);
+  f.view.select("a", { ...idle, session: { status: "idle", stale: true } });
+  assert.equal(f.el(".live-status-label").textContent, "Last known status: agent is idle");
+});
+
+test("notice-only fallback is clearly labeled and ordinary newer output retires an older notice", (t) => {
+  const f = fixture(t);
+  f.view.select("a", context([notice], { session: { status: "idle" } }));
+  assert.match(f.el(".live-fallback").innerHTML, /Session notice/);
+  assert.doesNotMatch(f.el(".live-fallback").innerHTML, /Latest instruction/);
+  assert.equal(f.el(".live-notice").hidden, true);
+  f.view.select("a", context([notice, { id: "reply", kind: "message", role: "assistant", text: "Recovered.", at: at(3000) }]));
+  assert.match(f.el(".live-fallback").innerHTML, /Recovered/);
+  assert.equal(f.el(".live-notice").hidden, true);
 });

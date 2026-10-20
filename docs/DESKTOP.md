@@ -31,6 +31,8 @@ Service replacement tolerates the short gap between launchd acknowledging remova
 
 The window loads only its configured local dashboard origin. Clicked web and Claude links open in their usual apps. Copy buttons use an isolated WebKit bridge and require a real click. The View menu provides Reload (Command-R) and Open in Browser (Command-Shift-O).
 
+Files in **Results** can be previewed in the window. A document's **Download** action opens the native save dialog without leaving the dashboard. Cancel leaves the destination alone; replacing an existing file requires the system's confirmation. The app stages the transfer beside the chosen destination and publishes it only after successful completion. Failed downloads show an error and preserve any existing file. Only the configured local service's session-file download route is accepted, with an 8 MiB limit and no redirects. See [file formats and access limits](ARTIFACTS.md).
+
 Since v0.6, the window checks dashboard readiness separately from source health. A usable dashboard opens even when a source is delayed or unavailable, so its freshness and error information remains accessible.
 
 ## Remove
@@ -64,3 +66,5 @@ v0.9.0 update on 2026-10-18: the app was rebuilt and signature-verified, and the
 v0.9.1 update on 2026-10-20: the app was rebuilt, installed and signature-verified. Its reopened window showed Current and Graph/List controls. The existing background collector remained healthy throughout the window update. Deep-tree changes and remaining extreme-graph rendering limits are recorded in [verification](VERIFICATION.md#v091-deep-tree-robustness--2026-10-20). No reboot/login test was added.
 
 The v0.10.0 update on 2026-10-20 reinstalls the background service for the new Live metadata/static modules and rebuilds the native window (build 11). Signature verification and the reopened Current/Graph/List state passed. [Automatic Live and graph evidence](VERIFICATION.md#v010-automatic-live-and-graph-rendering--2026-10-20) records the feature checks and limits.
+
+v0.11.0 update on 2026-10-20: the background service was reinstalled and the native app rebuilt as build 12. Signature verification and the reopened Current/Graph/List state passed. Synthetic native checks verified image/text previews, readable idle Live status, saving/cancelling/replacing a document and download failure without dashboard navigation. See [v0.11 evidence and limits](VERIFICATION.md#v011-files-and-readable-live--2026-10-20). No reboot/login test was added.
